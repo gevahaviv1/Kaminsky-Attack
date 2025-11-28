@@ -3,7 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <errno.h>
+// #include <errno.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -23,10 +23,10 @@
  *
  * Returns: LDNS_STATUS_OK on success, error status otherwise
  */
-ldns_status parse_dns_query(char *buffer, size_t len, ldns_pkt **query_pkt) {
+ldns_status parse_dns_query(unsigned char *buffer, size_t len, ldns_pkt **query_pkt) {
 
   // ldns_wire2pkt decodes raw DNS bytes (buffer) into a structured ldns_pkt
-  ldns_status status = ldns_wire2pkt(query_pkt, (uint8_t *)buffer, len);
+  ldns_status status = ldns_wire2pkt(query_pkt, buffer, len);
 
   if (status != LDNS_STATUS_OK) {
     fprintf(stderr, "Failed to parse DNS query: %s\n",
@@ -134,7 +134,7 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
     // create RDF for the owner name and IP address
     ldns_rdf *owner = NULL;
     ldns_rdf *rdata_ip = NULL;
-    ldns_rr *answer_rr = NULL;
+    // ldns_rr *answer_rr = NULL;
 
     owner = ldns_rdf_clone(ldns_rr_owner(question)); // owner = qname (same domain)
     if (owner == NULL) {
@@ -198,7 +198,7 @@ int send_dns_response(int sockfd, struct sockaddr_in *client_addr,
     return -1;
   }
 
-  int sent = sendto(sockfd, response_wire, response_size, 0,
+  int sent = (int)sendto(sockfd, response_wire, response_size, 0,
                     (struct sockaddr *)client_addr, sizeof(*client_addr));
   free(response_wire);
 
@@ -220,7 +220,7 @@ int send_dns_response(int sockfd, struct sockaddr_in *client_addr,
  * 5. Send response back to client
  */
 void handle_dns_query(int sockfd, struct sockaddr_in *client_addr,
-                      char *buffer, size_t len) {
+                      unsigned char *buffer, size_t len) {
   ldns_pkt *query_pkt = NULL;
   ldns_pkt *response_pkt = NULL;
 
@@ -302,11 +302,10 @@ int main() {
     // in client_addr (so we can reply)
     struct sockaddr_in client_addr;
     socklen_t client_addr_len = (socklen_t)sizeof(client_addr);
-    ssize_t bytes_received;
 
     // receive a DNS packet
-    bytes_received = recvfrom(sockfd, buffer, BUFFER_SIZE, 0,
-                              (struct sockaddr *)&client_addr, &client_addr_len);
+    ssize_t bytes_received = recvfrom(sockfd, buffer, BUFFER_SIZE, 0,
+                                      (struct sockaddr *) &client_addr, &client_addr_len);
 
     if (bytes_received < 0) {
       perror("recvfrom");
