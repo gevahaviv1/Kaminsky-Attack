@@ -21,20 +21,112 @@
  * ======================= */
 
 #define RESOLVER_IP        "192.168.1.203"   /* bind9res */
-#define ROOT_NS_IP         "192.168.1.204"   /* effective root (אם צריך) */
+#define ROOT_NS_IP         "192.168.1.204"   /* effective root */
 #define ATTACKER_AUTH_IP   "192.168.1.201"   /* attacker-auth */
 #define ATTACKER_CLIENT_IP "192.168.1.202"   /* this container */
 
 #define DNS_PORT           53
 #define MAX_SUBDOMAIN_LEN  256
-#define MAX_ROUNDS         1000   /* אתה תבחר מספר הגיוני */
-#define MAX_SPOOFED_PKTS   (65536 * 20) /* לפי הגבלה בתרגיל */
+#define MAX_BYTES_PER_PACKET 2048
+#define TCP_PORT    1234        //todo check port
+#define MAX_LEN_PORT 64
+// send at most 65536*20 spoofed packets in each attack attempt
+#define MAX_SPOOFED_PKTS   (65536 * 20)
 
 /* pcap handle for packet injection */
 static pcap_t *g_pcap_handle = NULL;
 
 /* learned resolver source port */
 static uint16_t g_resolver_src_port = 0;
+
+/* =======================
+ *   LISTENER HELPER FUNCTIONS
+ * ======================= */
+static int setup_tcp_listener(void)
+{
+  int sockfd;
+  int opt = 1;
+  struct sockaddr_in addr;
+
+  sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (sockfd < 0) {
+    perror("socket (tcp listener)");
+    return -1;
+  }
+// FROM EX0
+  if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, (socklen_t)sizeof(opt)) < 0) {
+    perror("setsockopt(SO_REUSEADDR)");
+    close(sockfd);
+    return -1;
+  }
+
+  opt = 1;
+    if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &opt, (socklen_t)sizeof(opt)) < 0) {
+        perror("setsockopt(SO_REUSEPORT)");
+        close(sockfd);
+        return -1;
+    }
+
+
+  memset(&addr, 0, sizeof(addr));
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_ANY);
+  addr.sin_port = htons(TCP_PORT);
+
+  if (bind(sockfd, (struct sockaddr *)&addr, (socklen_t)sizeof(addr)) < 0) {
+    perror("bind (tcp listener)");
+    close(sockfd);
+    return -1;
+  }
+
+  if (listen(sockfd, 1) < 0) {
+    perror("listen");
+    close(sockfd);
+    return -1;
+  }
+
+  printf("TCP listener ready on port %d\n", TCP_PORT);
+  return sockfd;
+}
+
+static int wait_for_resolver_port_over_tcp(int listen_sock)
+{
+  struct sockaddr_in peer;
+  socklen_t peer_len = (socklen_t)sizeof(peer);
+  int conn;
+  char buf[MAX_LEN_PORT];
+  ssize_t n;
+
+  printf("waiting for resolver port from server over TCP...\n");
+
+  conn = accept(listen_sock, (struct sockaddr *)&peer, &peer_len);
+  if (conn < 0) {
+    perror("accept");
+    return -1;
+  }
+
+  n = recv(conn, buf, (size_t)(sizeof(buf) - 1), 0);
+  if (n < 0) {
+    perror("recv");
+    close(conn);
+    return -1;
+  }
+
+  buf[n] = '\0';
+  printf("received port: '%s'\n", buf);
+
+  int port = atoi(buf);
+  close(conn);
+
+  if (port <= 0 || port > 65535) {
+    fprintf(stderr, "Invalid port number received: %d\n", port);
+    return -1;
+  }
+
+  return port;
+}
+
+
 
 /* =======================
  *   UTILITY FUNCTIONS
@@ -44,6 +136,8 @@ static uint16_t g_resolver_src_port = 0;
 static int init_pcap(void)
 {
     /* TODO: open pcap on "eth0" with pcap_open_live, check errors, etc. */
+    char errbuf[PCAP_ERRBUF_SIZE];
+    pcap_t *handle;
     /* set g_pcap_handle on success */
     return 0;
 }
@@ -171,8 +265,18 @@ int main(void)
 {
     int ret = 1; /* default: failure */
 
-    /* Seed RNG in case you use random subdomains or txid sequences. */
+    /* Seed RNG - random subdomains or txid sequences. */
     (void)srand((unsigned int)time(NULL));
+
+    // 1. start TCP listener to receive the resolver port from the server
+    int listen_sock = setup_tcp_listener();
+    if (listen_sock<0){
+      return EXIT_FAILURE;
+    }
+
+    printf(" step 2: basic query to our attackerdomain through the resolver"
+           ".\n");
+
 
     if (init_pcap() != 0) {
         goto cleanup;
