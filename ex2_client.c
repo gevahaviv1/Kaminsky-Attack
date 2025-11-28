@@ -62,7 +62,6 @@ static int setup_tcp_listener(void)
     perror("socket (tcp listener)");
     return -1;
   }
-// FROM EX0
   if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, (socklen_t)sizeof(opt)) < 0) {
     perror("setsockopt(SO_REUSEADDR)");
     close(sockfd);

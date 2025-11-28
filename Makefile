@@ -8,7 +8,10 @@ SERVER_SRC = ex2_server.c
 CLIENT_TARGET = ex2_client
 CLIENT_SRC = ex2_client.c
 
-all: $(SERVER_TARGET) $(CLIENT_TARGET)
+TEST_TARGET = test_dns
+TEST_SRC = test_dns.c
+
+all: $(SERVER_TARGET) $(CLIENT_TARGET) $(TEST_TARGET)
 
 $(SERVER_TARGET): $(SERVER_SRC)
 	$(CC) $(CFLAGS) -o $(SERVER_TARGET) $(SERVER_SRC) $(LDFLAGS)
@@ -16,8 +19,11 @@ $(SERVER_TARGET): $(SERVER_SRC)
 $(CLIENT_TARGET): $(CLIENT_SRC)
 	$(CC) $(CFLAGS) -o $(CLIENT_TARGET) $(CLIENT_SRC) $(LDFLAGS)
 
+$(TEST_TARGET): $(TEST_SRC)
+	$(CC) $(CFLAGS) -o $(TEST_TARGET) $(TEST_SRC) $(LDFLAGS)
+
 clean:
-	rm -f $(SERVER_TARGET) $(CLIENT_TARGET)
+	rm -f $(SERVER_TARGET) $(CLIENT_TARGET) $(TEST_TARGET)
 
 run_server: $(SERVER_TARGET)
 	sudo ./$(SERVER_TARGET)
@@ -25,4 +31,10 @@ run_server: $(SERVER_TARGET)
 run_client: $(CLIENT_TARGET)
 	sudo ./$(CLIENT_TARGET)
 
-.PHONY: all clean run_server run_client
+test: $(TEST_TARGET)
+	./$(TEST_TARGET)
+
+test_network: $(TEST_TARGET)
+	./$(TEST_TARGET) --network
+
+.PHONY: all clean run_server run_client test test_network
