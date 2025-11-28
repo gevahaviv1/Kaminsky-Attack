@@ -2,18 +2,27 @@ CC = gcc
 CFLAGS = -Wall -Wextra -g
 LDFLAGS = -lldns
 
-TARGET = ex2_server
-SRC = ex2_server.c
+SERVER_TARGET = ex2_server
+SERVER_SRC = ex2_server.c
 
-all: $(TARGET)
+CLIENT_TARGET = ex2_client
+CLIENT_SRC = ex2_client.c
 
-$(TARGET): $(SRC)
-	$(CC) $(CFLAGS) -o $(TARGET) $(SRC) $(LDFLAGS)
+all: $(SERVER_TARGET) $(CLIENT_TARGET)
+
+$(SERVER_TARGET): $(SERVER_SRC)
+	$(CC) $(CFLAGS) -o $(SERVER_TARGET) $(SERVER_SRC) $(LDFLAGS)
+
+$(CLIENT_TARGET): $(CLIENT_SRC)
+	$(CC) $(CFLAGS) -o $(CLIENT_TARGET) $(CLIENT_SRC) $(LDFLAGS)
 
 clean:
-	rm -f $(TARGET)
+	rm -f $(SERVER_TARGET) $(CLIENT_TARGET)
 
-run: $(TARGET)
-	sudo ./$(TARGET)
+run_server: $(SERVER_TARGET)
+	sudo ./$(SERVER_TARGET)
 
-.PHONY: all clean run
+run_client: $(CLIENT_TARGET)
+	sudo ./$(CLIENT_TARGET)
+
+.PHONY: all clean run_server run_client

