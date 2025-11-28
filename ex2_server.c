@@ -45,7 +45,7 @@ ldns_status parse_dns_query(char *buffer, size_t len, ldns_pkt **query_pkt) {
  */
 void log_client_info(struct sockaddr_in *client_addr) {
   uint16_t source_port = ntohs(client_addr->sin_port);
-  char *client_ip = inet_ntoa(client_addr->sin_addr);
+  char *client_ip =  inet_ntoa(client_addr->sin_addr);
 
   printf("======================================================\n");
   printf("| DNS Query Received                                 |\n");
