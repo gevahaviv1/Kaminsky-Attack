@@ -307,7 +307,8 @@ int main() {
       perror("recvfrom");
       continue;
     }
-    printf("Got %zd bytes from %s:%u\n",bytes_received,inet_ntoa
+    printf("Got %zd bytes from address %s: source port %u\n",bytes_received,
+           inet_ntoa
         (client_addr.sin_addr),(unsigned int)ntohs(client_addr.sin_port));
 
     // Handle the DNS query and capture source port
