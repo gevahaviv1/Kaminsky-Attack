@@ -3,7 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <errno.h>
+// #include <errno.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -23,10 +23,10 @@
  *
  * Returns: LDNS_STATUS_OK on success, error status otherwise
  */
-ldns_status parse_dns_query(char *buffer, size_t len, ldns_pkt **query_pkt) {
+ldns_status parse_dns_query(unsigned char *buffer, size_t len, ldns_pkt **query_pkt) {
 
   // ldns_wire2pkt decodes raw DNS bytes (buffer) into a structured ldns_pkt
-  ldns_status status = ldns_wire2pkt(query_pkt, (uint8_t *)buffer, len);
+  ldns_status status = ldns_wire2pkt(query_pkt, buffer, len);
 
   if (status != LDNS_STATUS_OK) {
     fprintf(stderr, "Failed to parse DNS query: %s\n",
@@ -45,14 +45,14 @@ ldns_status parse_dns_query(char *buffer, size_t len, ldns_pkt **query_pkt) {
  */
 void log_client_info(struct sockaddr_in *client_addr) {
   uint16_t source_port = ntohs(client_addr->sin_port);
-  char *client_ip = inet_ntoa(client_addr->sin_addr);
+  char *client_ip =  inet_ntoa(client_addr->sin_addr);
 
-  printf("╔════════════════════════════════════════════════════╗\n");
-  printf("║ DNS Query Received                                 ║\n");
-  printf("╠════════════════════════════════════════════════════╣\n");
-  printf("║ Source IP:   %-37s ║\n", client_ip);
-  printf("║ Source Port: %-37u ║\n", source_port);
-  printf("╚════════════════════════════════════════════════════╝\n");
+  printf("======================================================\n");
+  printf("| DNS Query Received                                 |\n");
+  printf("|                                                    |\n");
+  printf("| Source IP:   %-37s |\n", client_ip);
+  printf("| Source Port: %-37u |\n", source_port);
+  printf("|====================================================\n");
 }
 
 /**
@@ -62,19 +62,21 @@ void log_client_info(struct sockaddr_in *client_addr) {
  * Extracts and prints the queried domain name and record type.
  */
 void print_query_details(ldns_pkt *query_pkt) {
-  ldns_rr_list *q_list = ldns_pkt_question(query_pkt);
-  int q_count = ldns_rr_list_rr_count(q_list);
 
-  if (q_list != NULL && q_count!=0) { //if the list exists and is not empty
-    // TAKE THE FIRST QUESTION - USUALLY ONE PER PACKET
-    ldns_rr *question = ldns_rr_list_rr(ldns_pkt_question(query_pkt), 0);
-    char *qname = ldns_rdf2str(ldns_rr_owner(question));
-    ldns_rr_type qtype = ldns_rr_get_type(question);
-    // 'ldns_rdf2str' converts domain to human readable
-    // todo maybe print the conversion to see it succeeded
-    printf("Query: %s (Type: %s)\n\n", qname, ldns_rr_type2str(qtype));
-    free(qname);
+  ldns_rr_list *q_list = ldns_pkt_question(query_pkt);
+
+  if (q_list == NULL || ldns_rr_list_rr_count(q_list)==0) {
+    //if the list doesnt exist or is empty
+    return;
   }
+  // TAKE THE FIRST QUESTION - USUALLY ONE PER PACKET
+  ldns_rr *question = ldns_rr_list_rr(q_list, 0);
+  char *qname = ldns_rdf2str(ldns_rr_owner(question));
+  ldns_rr_type qtype = ldns_rr_get_type(question);
+  // 'ldns_rdf2str' converts domain to human readable
+  // todo maybe print the conversion to see it succeeded
+  printf("Query: %s (Type: %s)\n\n", qname, ldns_rr_type2str(qtype));
+  free(qname);
 }
 
 /**
@@ -93,7 +95,6 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
   ldns_pkt *response_pkt = ldns_pkt_new();
   if (response_pkt == NULL) {
     fprintf(stderr,"ldns_pkt_new failed\n");
-    ldns_pkt_free(query_pkt);
     return NULL;
   }
   // copy basic header fields from query
@@ -114,7 +115,6 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
 
   // Copy question section into the response
   ldns_rr *question = ldns_rr_list_rr(ldns_pkt_question(query_pkt), 0);
-  ldns_pkt_set_qdcount(response_pkt, 1);
   ldns_pkt_push_rr(response_pkt, LDNS_SECTION_QUESTION, ldns_rr_clone(question));
 
   // Create answer record - only if it's A record for
@@ -123,24 +123,23 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
   char *qname = ldns_rdf2str(ldns_rr_owner(question));
   ldns_rr_type qtype = ldns_rr_get_type(question);
   ldns_rr_class qclass = ldns_rr_get_class(question);
-  const char *attacker_target = " www.attacker.cybercourse.example.com";
+  const char *attacker_target = " www.attacker.cybercourse.example.com.";
   const char *attacker_ip = "192.168.1.201";
   // sanity check
   if(qtype==LDNS_RR_TYPE_A &&
       qclass==LDNS_RR_CLASS_IN &&
-      strcmp(qname,attacker_target)){
+      strcmp(qname,attacker_target)==0){
     printf("-> matching A query for attacker domain, sending A=%s\n",
            attacker_ip);
     // create RDF for the owner name and IP address
     ldns_rdf *owner = NULL;
     ldns_rdf *rdata_ip = NULL;
-    ldns_rr *answer_rr = NULL;
+    // ldns_rr *answer_rr = NULL;
 
-    owner = ldns_rdf_clone(qname); // owner = qname (same domain)
+    owner = ldns_rdf_clone(ldns_rr_owner(question)); // owner = qname (same domain)
     if (owner == NULL) {
       fprintf(stderr,"ldns_rdf_clone failed\n");
       free(qname);
-      ldns_pkt_free(query_pkt);
       return NULL;
     }
 
@@ -148,14 +147,14 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
     ldns_status new_status = ldns_str2rdf_a(&rdata_ip, attacker_ip);
     if (new_status != LDNS_STATUS_OK){
       //TODO HANDLE
+      fprintf(stderr,"ldns_str2rdf_a failed\n");
+      free(qname);
       return NULL;
     }
     ldns_rr *answer = ldns_rr_new();
     if (answer == NULL) {
       fprintf(stderr,"ldns_rr_new failed\n");
       free(qname);
-      ldns_pkt_free(query_pkt);
-      // todo handle
       return NULL;
     }
     ldns_rr_set_owner(answer, owner);
@@ -174,7 +173,7 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
     // if not our specific name, answer with no error and no answer
     ldns_pkt_set_rcode(response_pkt,LDNS_RCODE_NOERROR);
   }
-
+  free(qname);
   return response_pkt;
 }
 
@@ -199,7 +198,7 @@ int send_dns_response(int sockfd, struct sockaddr_in *client_addr,
     return -1;
   }
 
-  int sent = sendto(sockfd, response_wire, response_size, 0,
+  int sent = (int)sendto(sockfd, response_wire, response_size, 0,
                     (struct sockaddr *)client_addr, sizeof(*client_addr));
   free(response_wire);
 
@@ -221,7 +220,7 @@ int send_dns_response(int sockfd, struct sockaddr_in *client_addr,
  * 5. Send response back to client
  */
 void handle_dns_query(int sockfd, struct sockaddr_in *client_addr,
-                      char *buffer, size_t len) {
+                      unsigned char *buffer, size_t len) {
   ldns_pkt *query_pkt = NULL;
   ldns_pkt *response_pkt = NULL;
 
@@ -238,6 +237,12 @@ void handle_dns_query(int sockfd, struct sockaddr_in *client_addr,
 
   // Build response packet
   response_pkt = create_dns_response(query_pkt);
+
+  // check if not NULL
+  if (response_pkt==NULL) {
+    ldns_pkt_free(query_pkt);
+    return;
+  }
 
   // Send response
   send_dns_response(sockfd, client_addr, response_pkt);
@@ -297,11 +302,10 @@ int main() {
     // in client_addr (so we can reply)
     struct sockaddr_in client_addr;
     socklen_t client_addr_len = (socklen_t)sizeof(client_addr);
-    ssize_t bytes_received;
 
     // receive a DNS packet
-    bytes_received = recvfrom(sockfd, buffer, BUFFER_SIZE, 0,
-                              (struct sockaddr *)&client_addr, &client_addr_len);
+    ssize_t bytes_received = recvfrom(sockfd, buffer, BUFFER_SIZE, 0,
+                                      (struct sockaddr *) &client_addr, &client_addr_len);
 
     if (bytes_received < 0) {
       perror("recvfrom");
