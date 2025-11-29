@@ -1,0 +1,7 @@
+We used an LLM (ChatGPT) to assist with high-level explanations, structural 
+guidance, and clarifications about the exercise requirements for the 
+Kaminsky DNS cache poisoning attack. The LLM helped us understand the 
+roles of the attacker client, the attacker authoritative name server, 
+the attack flow, and the submission rules.
+
+The LLM also assisted in generating git commit messages.
