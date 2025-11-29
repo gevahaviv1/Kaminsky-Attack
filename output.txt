@@ -1,0 +1,27 @@
+root@6ed796955966:/tmp/mclient# dig @192.168.1.203 ww0.example1.cybercourse.example.com
+
+; <<>> DiG 9.18.39-0ubuntu0.24.04.2-Ubuntu <<>> @192.168.1.203 ww0.example1.cybercourse.example.com
+; (1 server found)
+;; global options: +cmd
+;; Got answer:
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 31725
+;; flags: qr rd ra; QUERY: 1, ANSWER: 1, AUTHORITY: 1, ADDITIONAL: 2
+
+;; OPT PSEUDOSECTION:
+; EDNS: version: 0, flags:; udp: 4096
+;; QUESTION SECTION:
+;ww0.example1.cybercourse.example.com. IN A
+
+;; ANSWER SECTION:
+ww0.example1.cybercourse.example.com. 75111 IN A 1.2.3.4
+
+;; AUTHORITY SECTION:
+example1.cybercourse.example.com. 75111	IN NS	ns.example1.cybercourse.example.com.
+
+;; ADDITIONAL SECTION:
+ns.example1.cybercourse.example.com. 75111 IN A	6.6.6.6
+
+;; Query time: 0 msec
+;; SERVER: 192.168.1.203#53(192.168.1.203) (UDP)
+;; WHEN: Sat Nov 29 17:46:21 UTC 2025
+;; MSG SIZE  rcvd: 114

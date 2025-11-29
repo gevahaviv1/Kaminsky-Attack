@@ -370,7 +370,7 @@ int main() {
     uint16_t src_port = ntohs(client_addr.sin_port);
     printf("Got %zd bytes from %s:%u\n",bytes_received,inet_ntoa(client_addr.sin_addr),(unsigned
     int)
-    src_port));
+    src_port);
     // if this packet is from resolver and we havent sent the port yet
     if (resolver_udp_port_sent==0 && strcmp(src_ip_str,RESOLVER_IP)==0){
       send_resolver_port_over_tcp ((int) src_port);
