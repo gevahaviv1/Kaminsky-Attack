@@ -1,0 +1,11 @@
+This implementation demonstrates a Kaminsky-style DNS cache poisoning attack against a vulnerable recursive resolver.
+The attack exploits the resolver's behavior by sending queries for randomized subdomains under a target zone, creating fresh attack windows where the resolver must contact upstream authoritative servers.
+During each window, the attacker floods the resolver with spoofed DNS responses containing guessed transaction IDs.
+Each spoofed response includes a malicious authority section claiming that the parent zone is delegated to an attacker-controlled nameserver, along with a glue record mapping that nameserver to an attacker-controlled IP address.
+By cycling through thousands of transaction ID guesses across multiple rounds with different subdomains, the attack eventually succeeds when a spoofed response arrives before the legitimate upstream response and matches the correct transaction ID, causing the resolver to cache the poisoned delegation records.
+
+The attacker operates two components: an authoritative nameserver that legitimately handles DNS queries for the attacker's domain and returns proper authoritative responses, and a client that orchestrates the attack.
+The client first discovers the resolver's source port by triggering a query that reaches the attacker's authoritative server, which reports the observed port back over a separate channel.
+The client then executes multiple attack rounds, each using a unique subdomain to avoid cached responses.
+For each round, it sends a legitimate query to the resolver to open an attack window, then immediately injects a large number of spoofed response packets with varying transaction IDs using raw socket techniques to forge source addresses and headers.
+After each flooding attempt, the client verifies whether the poisoning succeeded by querying the resolver and checking if the malicious delegation records have been cached.
