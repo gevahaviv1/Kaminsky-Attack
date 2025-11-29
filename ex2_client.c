@@ -784,6 +784,9 @@ static int check_poisoning(void)
     }
 
     // Check response details
+    printf("  [Check] Response RCODE: %d, Answers: %zu\n",
+           ldns_pkt_get_rcode(response),
+           ldns_pkt_ancount(response));
 
     // Check answer section for A record pointing to 6.6.6.6
     ldns_rr_list *answer = ldns_pkt_answer(response);
@@ -795,6 +798,7 @@ static int check_poisoning(void)
                 if (a_rdf) {
                     char *ip_str = ldns_rdf2str(a_rdf);
                     if (ip_str) {
+                        printf("  [Check] Got A record: %s\n", ip_str);
                         // Compare IP (strip trailing dot/whitespace if present)
                         if (strncmp(ip_str, poison_ip, strlen(poison_ip)) == 0) {
                             printf("\n✓ CACHE POISONED! %s → %s\n",
@@ -808,6 +812,10 @@ static int check_poisoning(void)
                 }
             }
         }
+    }
+
+    if (!poisoned) {
+        printf("  [Check] Cache not poisoned yet\n");
     }
 
 cleanup:
