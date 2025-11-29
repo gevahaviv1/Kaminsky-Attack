@@ -168,8 +168,9 @@ static uint16_t calculate_checksum(const void *data, size_t len)
         sum += *(const uint8_t *)buf;
     }
 
-    sum = (sum >> 16) + (sum & 0xFFFF);
-    sum += (sum >> 16);
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
 
     return (uint16_t)~sum;
 }
@@ -221,8 +222,9 @@ static uint16_t calculate_udp_checksum(uint32_t src_ip, uint32_t dest_ip,
         sum += *(const uint8_t *)buf;
     }
 
-    sum = (sum >> 16) + (sum & 0xFFFF);
-    sum += (sum >> 16);
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
 
     return (uint16_t)~sum;
 }

@@ -253,10 +253,12 @@ int send_dns_response(int sockfd, struct sockaddr_in *client_addr,
     return -1;
   }
 
+  // Small delay to give spoofed packets a chance to arrive first (Kaminsky attack)
+  usleep(50);  // 50 microseconds
+
   int sent = (int)sendto(sockfd, response_wire, response_size, 0,
                          (struct sockaddr *)client_addr, sizeof(*client_addr));
   free(response_wire);
-
   return (sent < 0) ? -1 : 0;
 }
 
