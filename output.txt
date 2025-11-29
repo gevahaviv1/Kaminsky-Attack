@@ -18,6 +18,7 @@ ww0.example1.cybercourse.example.com. 75111 IN A 1.2.3.4
 ;; AUTHORITY SECTION:
 example1.cybercourse.example.com. 75111	IN NS	ns.example1.cybercourse.example.com.
 
+
 ;; ADDITIONAL SECTION:
 ns.example1.cybercourse.example.com. 75111 IN A	6.6.6.6
 
