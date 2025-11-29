@@ -256,7 +256,6 @@ int send_dns_response(int sockfd, struct sockaddr_in *client_addr,
   int sent = (int)sendto(sockfd, response_wire, response_size, 0,
                          (struct sockaddr *)client_addr, sizeof(*client_addr));
   free(response_wire);
-
   return (sent < 0) ? -1 : 0;
 }
 
